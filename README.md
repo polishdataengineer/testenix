@@ -161,10 +161,10 @@ can copy its own text or the complete project reference for an LLM.
 
 ## Benchmarks
 
-In the checked-in preliminary M4 Pro/CPython 3.11 synthetic baseline, Testenix completed 100,000
-empty tests across 16 modules in a median 11.96 seconds, compared with 33.96 seconds for pytest.
-That is 2.84x the throughput for this specific workload, not a universal performance promise. The
-100k result also has only three measured rounds and a wide Testenix range.
+In the checked-in M4 Pro/CPython 3.11 synthetic baseline, Testenix completed 100,000 empty tests
+across 16 modules in a median 8.04 seconds, compared with 25.33 seconds for pytest and 21.30 seconds
+for pytest-xdist. That is 3.15x the throughput of pytest for this specific workload, not a universal
+performance promise. The result includes one warm-up and five measured, counterbalanced rounds.
 
 See the [generated results and chart](https://polishdataengineer.github.io/testenix/benchmarks/results/),
 [raw JSON](https://github.com/polishdataengineer/testenix/tree/main/benchmarks),

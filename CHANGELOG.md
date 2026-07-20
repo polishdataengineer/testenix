@@ -32,7 +32,7 @@ project intends to use Semantic Versioning once its public API reaches stability
   and eliminated per-test path/source inspection.
 - Compacted coordinator events, made event IDs deterministic, retained one JSONL descriptor per
   run, and removed unchanged manifest/selection copies.
-- Reduced the recorded 100k-test median to 11.957 seconds versus 33.957 seconds for pytest on the
+- Reduced the recorded 100k-test median to 8.038 seconds versus 25.333 seconds for pytest on the
   documented M4 Pro development baseline; comparative claims remain workload-specific.
 - Isolated benchmark runs from repository pytest configuration, disabled pytest cache/plugin
   autoloading, and added commit, lockfile, version, and dirty-state provenance to new results.

@@ -48,6 +48,7 @@ notes, and native-code decision. Real project suites and cross-platform repetiti
 before publishing broad comparative claims.
 
 An approved public baseline must be committed through a reviewed pull request. Do not remove slow
-but valid samples as outliers; invalid commands remain evidence and must be explained. The
-100,000-test development file currently has only three measured rounds and no warmup, so it is
-published transparently but does not satisfy the five-run minimum above.
+but valid samples as outliers; invalid commands remain evidence and must be explained. The current
+checked-in 10,000- and 100,000-test files each contain five measured rounds, one warm-up, and clean
+commit provenance. They remain single-machine synthetic evidence, so broader claims still require
+the real-project and cross-platform scenarios above.

@@ -44,7 +44,7 @@ for-llms
   <div class="metric-card"><strong>0</strong><span>third-party runtime dependencies</span></div>
   <div class="metric-card"><strong>12</strong><span>Python and OS combinations in CI</span></div>
   <div class="metric-card"><strong>3</strong><span>console, JSON, and JUnit reports</span></div>
-  <div class="metric-card"><strong>2.84×</strong><span>preliminary 100k synthetic throughput vs pytest</span></div>
+  <div class="metric-card"><strong>3.15×</strong><span>100k synthetic throughput vs pytest</span></div>
 </div>
 
 Testenix is deliberately built around a few strong guarantees:
@@ -95,12 +95,12 @@ If the first PyPI release is not available yet, install the current source with
 ## Performance evidence, with context
 
 The checked-in development baseline measured 100,000 empty tests across 16 generated modules on
-an Apple M4 Pro and CPython 3.11. Testenix completed that specific workload in a median 11.96
-seconds, compared with 33.96 seconds for pytest and 44.32 seconds for pytest-xdist.
+an Apple M4 Pro and CPython 3.11. Testenix completed that specific workload in a median 8.04
+seconds, compared with 25.33 seconds for pytest and 21.30 seconds for pytest-xdist.
 
 <div class="benchmark-caveat">
 This is a preliminary synthetic result from one machine, not a promise that every project will be
-2.84× faster. The benchmark page publishes the raw samples, environment, variance, methodology,
+3.15× faster. The benchmark page publishes the raw samples, environment, variance, methodology,
 and limitations so that the claim can be evaluated rather than taken on trust.
 </div>
 

@@ -218,7 +218,7 @@ future approved baselines must use the `testenix` identifier and record their co
 """
 
     return (
-        """# Published benchmark results
+        f"""# Published benchmark results
 
 These tables are generated from the raw JSON committed in `benchmarks/`. They are development
 evidence for specific synthetic workloads, not a universal claim that Testenix is always faster
