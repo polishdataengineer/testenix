@@ -36,20 +36,24 @@
     }
     article.dataset.llmToolbar = "ready";
 
-    const toolbar = document.createElement("div");
+    const toolbar = document.createElement("nav");
     toolbar.className = "llm-toolbar";
     toolbar.setAttribute("aria-label", "LLM documentation tools");
 
+    const label = document.createElement("span");
+    label.className = "llm-toolbar-label";
+    label.textContent = "LLM tools";
+
     const copyPage = document.createElement("button");
     copyPage.type = "button";
-    copyPage.textContent = "Copy this page";
+    copyPage.textContent = "Copy page";
 
     const copyAll = document.createElement("button");
     copyAll.type = "button";
-    copyAll.textContent = "Copy all docs for an LLM";
+    copyAll.textContent = "Copy all docs";
 
     const llmGuide = document.createElement("a");
-    llmGuide.textContent = "LLM reference";
+    llmGuide.textContent = "LLM guide";
     llmGuide.href = new URL("for-llms/", documentationRoot()).href;
 
     const status = document.createElement("span");
@@ -82,8 +86,18 @@
       }
     });
 
-    toolbar.append(copyPage, copyAll, llmGuide, status);
-    article.prepend(toolbar);
+    toolbar.append(label, copyPage, copyAll, llmGuide, status);
+
+    const pageSection = article.querySelector(":scope > section");
+    const pageHeading = pageSection?.querySelector(":scope > h1");
+    const homepageHero = pageSection?.querySelector(":scope > .testenix-hero");
+    if (homepageHero) {
+      homepageHero.insertAdjacentElement("afterend", toolbar);
+    } else if (pageHeading) {
+      pageHeading.insertAdjacentElement("afterend", toolbar);
+    } else {
+      article.prepend(toolbar);
+    }
   };
 
   if (document.readyState === "loading") {
