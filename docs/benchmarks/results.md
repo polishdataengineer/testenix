@@ -92,6 +92,103 @@ It remains a synthetic result from one machine, not a universal performance prom
 - Clean working tree at capture: yes
 - [Raw JSON](https://github.com/polishdataengineer/testenix/blob/main/benchmarks/baseline_100k.json)
 
+## Migrated-suite measurements
+
+These separate measurements start with generated pytest or unittest sources, complete one safe
+copy-and-validate migration, and then compare recurring source-suite runs with recurring native
+Testenix runs. The migration transaction is a one-time cost shown separately; it is not included
+in either execution median.
+
+| Source runner | Workload | Tests / modules | Source median | Native median | Native vs source | Migration transaction |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| pytest (sequential) | no-op | 3,000 / 64 | 1.539 s | 0.521 s | 2.96× faster | 5.940 s |
+| unittest outcome probe (sequential) | no-op | 3,000 / 64 | 0.161 s | 1.192 s | 7.40× slower | 6.742 s |
+| unittest outcome probe (sequential) | 1 ms body | 3,000 / 64 | 4.066 s | 2.577 s | 1.58× faster | 17.251 s |
+
+The native side used four workers. The source pytest and unittest outcome-probe baselines were
+sequential, so these rows do not compare Testenix with pytest-xdist or another parallel unittest
+runner. The unittest probe uses the standard-library loader and result semantics, then serializes
+per-test outcomes for parity checking; its timing therefore includes that small audit overhead.
+The no-op unittest wrappers are 7.40× slower than the probe because wrapper, loading, and
+result-adaptation costs dominate an empty body. With 1 ms of synthetic work per unittest method,
+parallel native execution is 1.58× faster in this 64-module layout. Module count and duration are
+therefore material, and none of these synthetic rows predicts a specific real project.
+
+### Raw migration samples and variance
+
+### pytest / no-op
+
+- Source command: `python -m pytest -q -p no:cacheprovider tests`
+- Native command: `python -m testenix run testenix_migrated --workers 4 --no-history`
+- Source median: 1.539 s
+- Source range: 1.519 s–1.573 s;
+  standard deviation: 0.020 s
+- Source raw samples: 1.547, 1.535, 1.539, 1.573, 1.519 seconds
+- Native Testenix median: 0.521 s
+- Native Testenix range: 0.496 s–0.570 s;
+  standard deviation: 0.030 s
+- Native Testenix raw samples: 0.532, 0.498, 0.570, 0.496, 0.521 seconds
+- Native workers: 4
+- Measured rounds: 5; warmups: 1
+- One-time copy, validation, and publication transaction: 5.940 s
+- Integrity gates: 3,000 converted tests, matching source/native outcomes,
+  original SHA-256 values unchanged
+- Recorded at: `2026-07-20T16:38:49.510465+00:00`
+- Source commit: [`3a51a901d268b061e9a87168300b41f3a2714a84`](https://github.com/polishdataengineer/testenix/commit/3a51a901d268b061e9a87168300b41f3a2714a84); worktree clean
+- Lock SHA-256: `8ef0a9258aa5196bf2891f9da9f66c29bcf4e9bf297d178f3d4939cad36130cf`
+- Versions: pytest=9.1.1, python=3.11.14, testenix=0.1.0, unittest=stdlib-3.11.14
+- Environment: cpu_count=14, cpu_model=Apple M4 Pro, machine=arm64, platform=macOS-26.5.1-arm64-arm-64bit, python_implementation=CPython, python_version=3.11.14
+- [Raw JSON](https://github.com/polishdataengineer/testenix/blob/main/benchmarks/migration_baseline_pytest_3000.json)
+
+### unittest / no-op
+
+- Source command: `python -m testenix._unittest_probe --output <project>/.benchmark-unittest.json tests`
+- Native command: `python -m testenix run testenix_migrated --workers 4 --no-history`
+- Source median: 0.161 s
+- Source range: 0.154 s–0.166 s;
+  standard deviation: 0.004 s
+- Source raw samples: 0.161, 0.160, 0.161, 0.154, 0.166 seconds
+- Native Testenix median: 1.192 s
+- Native Testenix range: 1.151 s–1.264 s;
+  standard deviation: 0.051 s
+- Native Testenix raw samples: 1.192, 1.171, 1.256, 1.151, 1.264 seconds
+- Native workers: 4
+- Measured rounds: 5; warmups: 1
+- One-time copy, validation, and publication transaction: 6.742 s
+- Integrity gates: 3,000 converted tests, matching source/native outcomes,
+  original SHA-256 values unchanged
+- Recorded at: `2026-07-20T16:39:05.030979+00:00`
+- Source commit: [`3a51a901d268b061e9a87168300b41f3a2714a84`](https://github.com/polishdataengineer/testenix/commit/3a51a901d268b061e9a87168300b41f3a2714a84); worktree clean
+- Lock SHA-256: `8ef0a9258aa5196bf2891f9da9f66c29bcf4e9bf297d178f3d4939cad36130cf`
+- Versions: pytest=9.1.1, python=3.11.14, testenix=0.1.0, unittest=stdlib-3.11.14
+- Environment: cpu_count=14, cpu_model=Apple M4 Pro, machine=arm64, platform=macOS-26.5.1-arm64-arm-64bit, python_implementation=CPython, python_version=3.11.14
+- [Raw JSON](https://github.com/polishdataengineer/testenix/blob/main/benchmarks/migration_baseline_unittest_3000.json)
+
+### unittest / 1 ms body
+
+- Source command: `python -m testenix._unittest_probe --output <project>/.benchmark-unittest.json tests`
+- Native command: `python -m testenix run testenix_migrated --workers 4 --no-history`
+- Source median: 4.066 s
+- Source range: 4.023 s–4.075 s;
+  standard deviation: 0.021 s
+- Source raw samples: 4.075, 4.063, 4.066, 4.023, 4.067 seconds
+- Native Testenix median: 2.577 s
+- Native Testenix range: 2.454 s–2.644 s;
+  standard deviation: 0.071 s
+- Native Testenix raw samples: 2.577, 2.601, 2.571, 2.454, 2.644 seconds
+- Native workers: 4
+- Measured rounds: 5; warmups: 1
+- One-time copy, validation, and publication transaction: 17.251 s
+- Integrity gates: 3,000 converted tests, matching source/native outcomes,
+  original SHA-256 values unchanged
+- Recorded at: `2026-07-20T16:40:02.708652+00:00`
+- Source commit: [`3a51a901d268b061e9a87168300b41f3a2714a84`](https://github.com/polishdataengineer/testenix/commit/3a51a901d268b061e9a87168300b41f3a2714a84); worktree clean
+- Lock SHA-256: `8ef0a9258aa5196bf2891f9da9f66c29bcf4e9bf297d178f3d4939cad36130cf`
+- Versions: pytest=9.1.1, python=3.11.14, testenix=0.1.0, unittest=stdlib-3.11.14
+- Environment: cpu_count=14, cpu_model=Apple M4 Pro, machine=arm64, platform=macOS-26.5.1-arm64-arm-64bit, python_implementation=CPython, python_version=3.11.14
+- [Raw JSON](https://github.com/polishdataengineer/testenix/blob/main/benchmarks/migration_baseline_unittest_3000_delay_1ms.json)
+
+
 ## Interpretation
 
 The checked-in results show that Testenix has low per-test overhead for large generated suites and
@@ -113,6 +210,15 @@ $ uv sync --locked --dev --no-editable
 $ uv run python benchmarks/run_benchmark.py --tests 10000 --workers 4 --repeats 5
 $ uv run python benchmarks/run_benchmark.py --tests 10000 --workers 4 --repeats 5 --uneven
 $ uv run python benchmarks/run_benchmark.py --tests 100000 --workers 4 --repeats 5
+$ uv run python benchmarks/run_migration_benchmark.py --framework pytest --tests 3000 \
+    --modules 64 --workers 4 --warmups 1 --repeats 5 \
+    --output benchmarks/migration_baseline_pytest_3000.json
+$ uv run python benchmarks/run_migration_benchmark.py --framework unittest --tests 3000 \
+    --modules 64 --workers 4 --warmups 1 --repeats 5 \
+    --output benchmarks/migration_baseline_unittest_3000.json
+$ uv run python benchmarks/run_migration_benchmark.py --framework unittest --tests 3000 \
+    --modules 64 --workers 4 --delay-ms 1 --warmups 1 --repeats 5 \
+    --output benchmarks/migration_baseline_unittest_3000_delay_1ms.json
 ```
 
 Review the [benchmarking contract](../benchmarking.md) before comparing or publishing new data.

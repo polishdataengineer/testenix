@@ -28,6 +28,7 @@ description: Testenix is an async-native, parallel-first Python testing framewor
   <div class="testenix-actions">
     <a href="https://polishdataengineer.github.io/testenix/getting-started/">Start testing</a>
     <a href="https://polishdataengineer.github.io/testenix/guides/pytest-compatibility/">Run pytest suites</a>
+    <a href="https://polishdataengineer.github.io/testenix/guides/migration/">Migrate safely</a>
     <a href="https://polishdataengineer.github.io/testenix/benchmarks/results/">See the benchmarks</a>
     <a href="https://polishdataengineer.github.io/testenix/for-llms/">Copy docs for an LLM</a>
   </div>
@@ -39,6 +40,7 @@ description: Testenix is an async-native, parallel-first Python testing framewor
 
 getting-started
 guides/pytest-compatibility
+guides/migration
 guides/writing-tests
 guides/fixtures
 guides/parallelism
@@ -88,6 +90,18 @@ $ testenix pytest -q tests
 
 [Read the compatibility contract](https://polishdataengineer.github.io/testenix/guides/pytest-compatibility/) before migrating individual
 modules to the native engine.
+
+To create a validated native copy without modifying the originals, use:
+
+```console
+$ testenix migrate auto tests --dry-run
+$ testenix migrate auto tests --check
+$ testenix migrate auto tests --output tests_testenix
+```
+
+The migrator executes the source baseline and both serial and parallel native candidates in
+disposable project copies, compares their inventories and outcomes, and publishes only through an
+atomic no-overwrite rename. [Read the safe migration contract](https://polishdataengineer.github.io/testenix/guides/migration/).
 
 ```python
 from collections.abc import AsyncIterator
@@ -207,6 +221,19 @@ lossless reports. The two commands have deliberately separate semantics. See
 [pytest compatibility](https://polishdataengineer.github.io/testenix/guides/pytest-compatibility/) for the capability matrix and migration
 boundary.
 
+Create a validated native copy of supported pytest or unittest modules without changing the
+originals:
+
+```console
+$ testenix migrate auto tests --dry-run
+$ testenix migrate auto tests --output tests_testenix
+$ testenix run tests_testenix
+```
+
+Migration requires a green source run and matching serial/parallel native runs before an atomic
+new-directory publish. Read [safe migration](https://polishdataengineer.github.io/testenix/guides/migration/) before using it on a suite with
+external side effects.
+
 ## Create a native test
 
 Testenix collects ordinary functions whose names begin with `test_`. Decorators are optional for
@@ -288,6 +315,7 @@ collection and execution process trees before control returns to the caller.
 
 - [Write tests, cases, tags, skips, and expected failures](https://polishdataengineer.github.io/testenix/guides/writing-tests/)
 - [Run or migrate an existing pytest suite](https://polishdataengineer.github.io/testenix/guides/pytest-compatibility/)
+- [Convert pytest or unittest safely without replacing originals](https://polishdataengineer.github.io/testenix/guides/migration/)
 - [Build fixture graphs](https://polishdataengineer.github.io/testenix/guides/fixtures/)
 - [Understand process parallelism and timeouts](https://polishdataengineer.github.io/testenix/guides/parallelism/)
 - [Produce JSON and JUnit reports](https://polishdataengineer.github.io/testenix/guides/reports/)
@@ -314,6 +342,10 @@ configuration:
 $ python -m pip install "testenix[pytest]"
 $ testenix pytest -q tests
 ```
+
+For the supported static subset, `testenix migrate pytest tests` can instead create a validated
+native copy without modifying the source. [The safe migration guide](https://polishdataengineer.github.io/testenix/guides/migration/) defines its
+strict support and rollback contract.
 
 If a supported pytest (`>=8.3,<10`) is already installed in the same Python environment, installing
 the base `testenix` package is enough. The extra is a convenience for environments that do not
@@ -346,26 +378,24 @@ native `--workers` option into an xdist option.
 
 ## Capability matrix
 
-| Capability | `testenix pytest` | `testenix run` |
-| --- | --- | --- |
-| Plain module-level `test_*` functions | Yes, through pytest | Yes |
-| Pytest classes and unittest-style tests | Yes | No |
-| `pytest.fixture` and built-in fixtures | Yes | No |
-| `conftest.py` fixture and hook discovery | Yes | No |
-| `pytest.mark.parametrize` | Yes | No; use Testenix `@case` or `@cases` |
-| Pytest skip, xfail, and custom markers | Yes | No; use Testenix decorators and tags |
-| Pytest assertion rewriting | Yes | No |
-| Pytest plugins and hooks | Yes, when installed in the same environment | No |
-| `pytest.ini` and `[tool.pytest.ini_options]` | Yes | No |
-| Pytest node IDs and CLI selectors | Yes | No |
-| pytest-xdist | Yes, when installed and requested with `-n` | No; use native `--workers` |
-| Async tests | According to the installed pytest plugins | Native, without a plugin |
-| Testenix retries and `FLAKY` semantics | No | Yes |
-| Testenix duration history and scheduling | No | Yes |
-| Testenix lossless result model | No | Yes |
-| Testenix JSON/JUnit reporters | No; use pytest options or plugins | Yes |
-| Published native Testenix speedups | No | Only for the documented workloads |
-| Exit status | Unchanged pytest or plugin status | Testenix exit-code contract |
+| Capability | `testenix pytest` | `migrate` then `run` | Direct `testenix run` |
+| --- | --- | --- | --- |
+| Plain module-level pytest-default `test*` functions | Yes, through pytest | Yes | `test_` or native `@test` |
+| Pytest classes | Yes | Blocked | No |
+| Simple local fixture | Yes | Converted | Only native `@fixture` |
+| Session-scoped pytest fixture | Yes | Blocked: run-global vs worker-local | Native scope is worker-local |
+| Built-in/dynamic fixture | Yes | Blocked | No pytest fixture semantics |
+| Adjacent `conftest.py` fixture | Yes | Simple static subset | No automatic conftest discovery |
+| Static single `parametrize` | Yes | Converted to cases | Use `@case` or `@cases` |
+| Skip and plain custom marker | Yes | Converted | Use Testenix decorators/tags |
+| Pytest xfail | Yes | Blocked due semantic differences | Use native `@xfail` intentionally |
+| Pytest assertion rewriting | Yes | No | No |
+| Plugins, hooks, pytest config | Yes | Blocked/not translated | No |
+| Async plugin semantics | According to plugins | Blocked | Native async needs no plugin |
+| Testenix worker scheduler/history | No | Yes after migration | Yes |
+| Testenix retries and lossless results | No | Yes after migration | Yes |
+| Published native speedups | No | Measure generated suite | Only documented workloads |
+| Source preservation | Runs source | Source stays untouched | Not applicable |
 
 Some simple pytest-authored functions also happen to run with `testenix run`, but that overlap is
 not a compatibility guarantee. In particular, the native collector does not interpret pytest
@@ -406,18 +436,291 @@ be used to describe `testenix pytest`.
 ## Migration path
 
 Use the bridge first to put Testenix in front of an unchanged suite without altering its semantics.
-Migrate individual modules to native Testenix only when their pytest dependencies have explicit
-equivalents:
+Then let the conservative migrator identify and validate modules whose pytest dependencies have
+explicit equivalents:
 
 1. keep the whole suite green with `testenix pytest`;
-2. replace pytest fixtures with Testenix `@fixture` providers;
-3. replace `parametrize` with `@case` or `@cases`;
-4. replace pytest markers with Testenix tags, `@skip`, and `@xfail`;
-5. run migrated modules with `testenix run` and leave the remainder on the bridge;
-6. compare behavior before making native performance claims.
+2. run `testenix migrate pytest tests --dry-run` and inspect every diagnostic;
+3. use `--check --report-json ...` to execute the source, serial native, and parallel native gates;
+4. publish to a new directory only after all three inventories/outcomes agree;
+5. keep unsupported modules on `testenix pytest` and keep all originals during rollout;
+6. benchmark the generated directory before making a native performance claim.
+
+The migrator replaces simple fixtures, parametrization, skip conditions, and plain markers in the
+generated copy. It never performs edits in place. Manual rewrites are still necessary for blocked
+plugin, hook, built-in fixture, class, xfail, and dynamic behavior.
 
 The current bridge does not convert pytest outcomes into a Testenix `RunResult`. Deeper event and
 report aggregation is a future compatibility layer and requires explicit pytest hook integration.
+
+---
+
+# Document: Safe migration
+
+Canonical URL: https://polishdataengineer.github.io/testenix/guides/migration/
+Source: docs/guides/migration.md
+
+---
+description: Safely convert supported pytest and unittest suites to native Testenix without replacing the originals.
+---
+
+# Safe migration to native Testenix
+
+An existing suite can use Testenix in three ways:
+
+| Goal | Command | Execution engine | Original suite |
+| --- | --- | --- | --- |
+| Preserve all pytest behavior | `testenix pytest -q tests` | pytest | Runs directly |
+| Check whether native conversion is supported | `testenix migrate auto tests --dry-run` | no tests run | Read-only |
+| Create a validated native copy | `testenix migrate auto tests -o tests_testenix` | Testenix after conversion | Kept and used as the baseline |
+
+Migration is conservative. It stops on a construct whose behavior cannot be proven equivalent
+instead of producing a plausible-looking, incomplete suite.
+
+## First migration
+
+For pytest, install the optional dependency because validation executes the real source suite:
+
+```console
+$ python -m pip install "testenix[pytest]"
+$ testenix migrate pytest tests --dry-run
+$ testenix migrate pytest tests --check --workers 2 \
+    --report-json reports/migration-check.json
+$ testenix migrate pytest tests --output tests_testenix \
+    --report-json reports/migration.json
+$ testenix run tests_testenix
+```
+
+For a standard-library unittest suite, no extra package is needed:
+
+```console
+$ testenix migrate unittest tests --output tests_testenix
+```
+
+Use `auto` when pytest-style modules and unittest modules live in the same selected directory.
+They must be separate modules; a file that mixes both test models is rejected.
+
+The destination defaults to `testenix_migrated`. It must be a new directory inside the project,
+with an existing real parent. There is deliberately no `--force` and no in-place mode.
+An integer `--workers` value must be at least 2 so the parallel gate cannot silently repeat the
+serial command. A one-module suite still has one schedulable affinity unit, which is disclosed as a
+`MIG006` warning; spread tests across independent modules to exercise multiple workers. An
+audit-report path must also be new, inside the project, and disjoint from every selected source and
+the output suite. Testenix never replaces an existing report.
+
+## Transaction and rollback contract
+
+Testenix uses copy-and-validate rather than edit-and-undo:
+
+```text
+preflight paths
+  -> snapshot source names + SHA-256
+  -> convert in memory
+  -> run original suite in disposable project copy
+  -> run generated suite with one Testenix worker in a fresh copy
+  -> run generated suite in parallel in another fresh copy
+  -> compare inventory, totals, and every mapped test outcome
+  -> recheck every source hash
+  -> atomically publish a new directory without replacement
+```
+
+If parsing, conversion, the source baseline, either native run, parity comparison, a source hash,
+or publication fails before the atomic rename, the requested output directory remains absent. A
+failure to write the optional report after a successful rename instead leaves the validated output
+published, prints an explicit warning, and returns the successful migration status. Testenix never writes to,
+renames, deletes, or replaces a selected source file. There are therefore no old files to restore:
+the old suite was never changed.
+
+`--dry-run` stops after static analysis and a final source-hash check. `--check` performs the full
+three-run validation but does not publish the destination. The default performs the same checks
+and then uses an operating-system no-replace rename. If another process creates the destination
+during validation, publication fails closed.
+
+POSIX staging creation, artifact writes, publication, and cleanup are anchored to open directory
+descriptors. On a platform without safe descriptor-relative recursive deletion, a non-empty
+failed staging transaction is retained under `.testenix/migrations` for inspection instead of
+being removed with a path-based recursive walk.
+
+Validation runs with the shadow as both the current directory and `PWD`, so ordinary relative-path
+writes land in the disposable copy. A shadow is not an operating-system security sandbox: a test
+can still write through a hard-coded absolute path or another environment variable, and network,
+database, cloud, and subprocess side effects remain external. Selected Python sources are rehashed
+before every terminal result, so detected drift stops publication, but Testenix never tries to undo
+an independent user or test-process edit. Use test credentials and `--dry-run` first for suites
+with external effects.
+
+## Pytest conversion contract
+
+The current converter supports the subset below:
+
+- module-level pytest-default `test*` functions and normal Python `assert` statements;
+- one static `pytest.mark.parametrize` with static names, rows, IDs, and unmarked
+  `pytest.param(..., id=...)` values;
+- local fixtures with no parameters, autouse, or `request`, using function or module scope;
+- simple fixtures from an adjacent `conftest.py` in the same directory;
+- static `pytest.mark.skip` and `pytest.mark.skipif`;
+- plain argument-free custom markers, converted to Testenix tags;
+- pytest runtime helpers `approx`, `deprecated_call`, `fail`, `raises`, and `warns`. Generated
+  modules using these helpers still require pytest at runtime.
+
+It blocks, with a file and line diagnostic:
+
+- pytest test classes, xfail, runtime skip/xfail/importorskip/exit, xunit lifecycle hooks;
+- built-in fixtures such as `tmp_path`, `monkeypatch`, `capsys`, and `request`;
+- autouse or parametrized fixtures, fixture overrides, and inherited ancestor-`conftest` fixtures;
+- session-scoped fixtures, because pytest creates one per run while Testenix session scope is
+  currently worker-local;
+- stacked, dynamic, indirect, scoped, or per-case-marked parametrization;
+- `usefixtures`, module-level `pytestmark`, hook functions, plugin registration, and semantic
+  plugin markers such as asyncio/anyio, timeout, order, repeat, or flaky;
+- decorators and required parameters whose execution meaning cannot be established statically.
+
+Any converted pytest file whose name is not already `test_*.py` is renamed in the generated copy
+to a native-discoverable name. Explicit nonstandard files such as `specs.py` are supported when
+they contain static test inventory. Supporting Python modules and package `__init__.py` files under
+the selected source directories are copied to preserve common relative imports. Missing non-Python
+assets or path-sensitive `__file__` behavior will make candidate validation fail rather than
+publish a bad copy.
+
+Pytest plugins are intentionally not emulated. Keep using `testenix pytest` for modules that need
+them and migrate supported modules incrementally.
+
+## Unittest conversion contract
+
+Rewriting `self.assertEqual`, lifecycle methods, cleanup stacks, and mock decorators would be
+fragile. Instead, Testenix generates one native function wrapper per test method. The wrapper:
+
+1. resolves the original by the exact wrapper-to-project relative path, independent of `cwd`;
+2. verifies a manifest containing every selected Python source and SHA-256;
+3. loads the original class by exact path;
+4. executes one method through the standard `TestCase.run(TestResult)` protocol;
+5. exposes its pass, failure, skip, expected-failure, or unexpected-success outcome to Testenix.
+
+This preserves direct subclasses of `unittest.TestCase` and
+`unittest.IsolatedAsyncioTestCase`, including per-test `setUp`/`tearDown`, async lifecycle,
+`addCleanup`, `assert*`, context-manager assertions, and `unittest.mock.patch`. Static skips map to
+Testenix `SKIP`; `expectedFailure` maps to `XFAIL`; an unexpected success remains the gating
+`XPASS` outcome.
+
+The generated unittest suite deliberately depends on the unchanged originals. Do not delete or
+move them, and do not move or rename the published generated directory: wrappers encode the exact
+relative relationship between both trees. If either path or an original file changes, rerun
+migration; a changed source makes native collection fail with an explicit diagnostic.
+
+The converter blocks `subTest`, runtime `skipTest`/`SkipTest`, class/module lifecycle and cleanup,
+custom `run` or loader hooks, `load_tests`, mixins or indirect inheritance, `FunctionTestCase`,
+dynamic/DDT/parameterized method generation, metaclasses, and ambiguous decorators.
+
+## What validation compares
+
+The source suite must be green. Testenix records and compares:
+
+- the exact collected test count against the converter's source-to-target mapping;
+- passed, failed, error, skipped, expected-failure, and unexpected-success totals;
+- the outcome of every source test against its exact generated target mapping;
+- native serial and native parallel outcome signatures;
+- every selected Python source path and SHA-256 immediately before publication.
+
+A pre-existing source failure is not treated as proof of equivalent conversion, even when the
+candidate happens to fail too. Fix the baseline or use `--dry-run` to inspect static support.
+
+The JSON audit report uses the versioned `testenix.migration-report` format. It includes source
+hashes, every source-to-target mapping, per-test outcomes, generated files, line diagnostics,
+timings and summaries for all validation runs, publication status, and an `originals_modified`
+flag. It is false for a successful transaction and true when a terminal source recheck detects
+drift; the flag reports observed state and does not claim that Testenix caused an independent edit.
+
+## Performance with thousands of migrated tests
+
+Migration unlocks the native scheduler, process supervision, async engine, retries, history, and
+Testenix reports. It does not guarantee that every converted suite is faster. Testenix keeps a
+normal module as one affinity unit so module-scoped fixtures are not duplicated. Consequently,
+3,000 tests in one source module still form one schedulable unit; 3,000 tests spread across enough
+independent modules can use multiple workers.
+
+The checked-in migration baseline used an Apple M4 Pro, CPython 3.11, 3,000 generated tests in 64
+modules, four native workers, one warm-up, and five measured rounds:
+
+| Source runner | Test body | Source median | Native median | Native result | One-time migration |
+| --- | --- | ---: | ---: | ---: | ---: |
+| sequential pytest | no-op | 1.539 s | 0.521 s | 2.96x faster | 5.940 s |
+| sequential unittest outcome probe | no-op | 0.161 s | 1.192 s | 7.40x slower | 6.742 s |
+| sequential unittest outcome probe | 1 ms sleep | 4.066 s | 2.577 s | 1.58x faster | 17.251 s |
+
+The migration column is the complete copy, source-baseline, serial-candidate,
+parallel-candidate, integrity-check, and publication transaction. It is paid when regenerating a
+suite and is deliberately excluded from the recurring execution medians. The unittest adapter
+loads the unchanged source and translates `TestCase.run()` results for every native wrapper. That
+fixed cost dominates an empty method; once the generated methods contain 1 ms of synthetic work,
+parallel execution across 64 modules outweighs it in this scenario.
+
+These source measurements use sequential pytest and a sequential Testenix probe built on the
+stdlib unittest loader/result protocol. The probe serializes per-test outcomes for the parity gate,
+so its small audit overhead is included. They are not comparisons
+against pytest-xdist or a third-party parallel unittest runner. They are synthetic timing evidence,
+not a promise for a real project: imports, fixtures, I/O, test-duration distribution, module
+affinity, worker count, operating system, and CPU can all reverse the result. See the
+[generated benchmark page](https://polishdataengineer.github.io/testenix/benchmarks/results/) for raw samples and variance, or inspect the
+checked-in [pytest](https://github.com/polishdataengineer/testenix/blob/main/benchmarks/migration_baseline_pytest_3000.json),
+[unittest no-op](https://github.com/polishdataengineer/testenix/blob/main/benchmarks/migration_baseline_unittest_3000.json),
+and [unittest 1 ms](https://github.com/polishdataengineer/testenix/blob/main/benchmarks/migration_baseline_unittest_3000_delay_1ms.json)
+JSON files directly.
+
+Benchmark the generated directory only after parity validation:
+
+```console
+$ python benchmarks/run_migration_benchmark.py \
+    --framework pytest --tests 3000 --modules 64 --workers 4 \
+    --warmups 1 --repeats 5 --output migration-pytest-3000.json
+$ python benchmarks/run_migration_benchmark.py \
+    --framework unittest --tests 3000 --modules 64 --workers 4 \
+    --warmups 1 --repeats 5 --output migration-unittest-3000.json
+$ python benchmarks/run_migration_benchmark.py \
+    --framework unittest --tests 3000 --modules 64 --workers 4 --delay-ms 1 \
+    --warmups 1 --repeats 5 --output migration-unittest-3000-delay-1ms.json
+```
+
+The harness checks the exact count and source hashes before accepting any timing sample. Publish
+the raw JSON, environment, module count, worker count, variance, and commands with a result. Do not
+apply the repository's synthetic native benchmark ratio to a real migrated project without
+measuring it.
+
+## CI rollout
+
+A low-risk rollout keeps both suites for several releases and runs the exact newly published copy:
+
+```yaml
+- name: Generate and validate a fresh native copy
+  run: |
+    testenix migrate auto tests --output tests_testenix_ci --workers 2 \
+      --report-json migration-report.json
+
+- name: Existing source suite
+  run: testenix pytest -q tests
+
+- name: Run the exact validated copy
+  run: testenix run tests_testenix_ci --no-history
+```
+
+The output and report paths must be absent at job start, which is natural on a fresh CI checkout.
+`--check` validates an ephemeral candidate; it does not prove that a separately committed
+`tests_testenix` directory has identical bytes. Regenerate and publish a fresh CI output as above,
+or add a project-specific content-manifest check for a committed copy. Regenerate whenever a pinned
+unittest source changes.
+
+## Exit codes
+
+| Code | Migration meaning |
+| ---: | --- |
+| `0` | Analysis, check, or publication completed successfully. |
+| `1` | Source or candidate execution failed, timed out, or produced different outcomes. |
+| `2` | Unsafe/invalid path, existing output, source drift, or command usage error. |
+| `3` | Internal process or pre-publication report failure. A report-only failure after publication warns and preserves exit `0`. |
+| `4` | At least one construct is unsupported by the conservative converter. |
+| `130` | Interrupted by the user. |
+
+Diagnostics beginning with `PYT` describe pytest source, `UNIT` describes unittest source, and
+`MIG` describes cross-framework inventory or transaction safety.
 
 ---
 
@@ -857,6 +1160,7 @@ Source: docs/reference/cli.md
 testenix [-h] [--version]
 testenix [--config PYPROJECT] run [RUN_ARGS ...]
 testenix pytest [PYTEST_ARGS ...]
+testenix migrate FRAMEWORK PATH [PATH ...] [MIGRATION_ARGS ...]
 ```
 
 | Option | Description |
@@ -920,6 +1224,35 @@ instead. In particular, `testenix --config PATH pytest ...` is rejected; `pytest
 follow `testenix`. See [pytest compatibility](https://polishdataengineer.github.io/testenix/guides/pytest-compatibility/) for the full
 boundary.
 
+## `testenix migrate`
+
+```text
+testenix migrate {auto,pytest,unittest} PATH [PATH ...]
+                 [-o OUTPUT]
+                 [-w auto|N]
+                 [--validation-timeout SECONDS]
+                 [--dry-run | --check]
+                 [--report-json FILE|-]
+```
+
+| Argument | Default | Description |
+| --- | --- | --- |
+| `FRAMEWORK` | required | `pytest`, `unittest`, or `auto` for separate modules of both kinds. |
+| `PATH ...` | required | Source files or directories. Sources are never modified. |
+| `-o`, `--output` | `testenix_migrated` | New directory to publish; it must not exist. |
+| `-w`, `--workers` | `auto` | Worker count for parallel candidate validation; an integer must be at least `2`. |
+| `--validation-timeout` | `300` | Independent deadline for each source/native subprocess. |
+| `--dry-run` | off | Static analysis and source-hash check only; run and publish nothing. |
+| `--check` | off | Full differential validation, with no published output. |
+| `--report-json` | none | New audit path inside the project and outside source/output suites, or `-` for clean JSON on standard output. |
+
+Without `--dry-run` or `--check`, migration requires a green source baseline, an equal native
+serial result, and an equal native parallel result, including every mapped test outcome. It then rechecks source hashes and atomically
+renames a complete staging directory to the new output without replacement. A failure before that
+rename leaves the output absent. A report-only failure after publication warns but leaves the
+validated output and successful exit status intact. See [safe migration](https://polishdataengineer.github.io/testenix/guides/migration/) for supported constructs, unittest's
+SHA-pinned wrapper model, rollback guarantees, and external-side-effect boundaries.
+
 ## Examples
 
 ```console
@@ -930,6 +1263,9 @@ $ testenix run --retries 1 --timeout 10
 $ testenix run --json reports/run.json --junit reports/junit.xml
 $ testenix --config config/pyproject.toml run
 $ testenix pytest -q tests
+$ testenix migrate pytest tests --dry-run
+$ testenix migrate auto tests --check --report-json reports/migration.json
+$ testenix migrate unittest tests --output tests_testenix
 ```
 
 ## Exit codes
@@ -942,6 +1278,17 @@ The native `testenix run` command uses these codes:
 | `1` | A test failed, errored, timed out, crashed, became flaky, or unexpectedly passed. |
 | `2` | Invalid CLI/configuration, collection error, or empty explicit tag selection. |
 | `3` | Internal runner, reporter, or history failure. |
+| `130` | User interruption. |
+
+The `testenix migrate` command uses these codes:
+
+| Code | Meaning |
+| ---: | --- |
+| `0` | Analysis, check, or publication succeeded; also retained after a report-only failure following publication. |
+| `1` | Source/candidate execution failed, timed out, or differed. |
+| `2` | Unsafe path, existing output, source drift, or invalid migration usage. |
+| `3` | Internal process or report failure before publication. |
+| `4` | An unsupported construct was found; nothing was published. |
 | `130` | User interruption. |
 
 `testenix pytest` hands the current CLI process to pytest, so pytest or plugin exit statuses are
@@ -1147,6 +1494,43 @@ Mark a test as expected to fail. An unexpected pass becomes the gating `XPASS` s
    :members:
 ```
 
+## Migration
+
+The programmatic API follows the same copy-only transaction as `testenix migrate`. `project_root`
+defaults to the current directory. Prefer `dry_run=True` before a validating or publishing call.
+
+```python
+from pathlib import Path
+
+from testenix import MigrationOptions, migrate
+
+report = migrate(
+    MigrationOptions(
+        framework="auto",
+        sources=(Path("tests"),),
+        output=Path("tests_testenix"),
+        check_only=True,
+    )
+)
+assert report.originals_modified is False
+```
+
+```{eval-rst}
+.. autofunction:: testenix.migrate
+
+.. autoclass:: testenix.MigrationOptions
+   :members:
+
+.. autoclass:: testenix.MigrationReport
+   :members:
+
+.. autoclass:: testenix.MigrationStatus
+   :members:
+
+.. autoclass:: testenix.ValidationSummary
+   :members:
+```
+
 ## Events
 
 ```{eval-rst}
@@ -1258,6 +1642,103 @@ It remains a synthetic result from one machine, not a universal performance prom
 - Clean working tree at capture: yes
 - [Raw JSON](https://github.com/polishdataengineer/testenix/blob/main/benchmarks/baseline_100k.json)
 
+## Migrated-suite measurements
+
+These separate measurements start with generated pytest or unittest sources, complete one safe
+copy-and-validate migration, and then compare recurring source-suite runs with recurring native
+Testenix runs. The migration transaction is a one-time cost shown separately; it is not included
+in either execution median.
+
+| Source runner | Workload | Tests / modules | Source median | Native median | Native vs source | Migration transaction |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| pytest (sequential) | no-op | 3,000 / 64 | 1.539 s | 0.521 s | 2.96× faster | 5.940 s |
+| unittest outcome probe (sequential) | no-op | 3,000 / 64 | 0.161 s | 1.192 s | 7.40× slower | 6.742 s |
+| unittest outcome probe (sequential) | 1 ms body | 3,000 / 64 | 4.066 s | 2.577 s | 1.58× faster | 17.251 s |
+
+The native side used four workers. The source pytest and unittest outcome-probe baselines were
+sequential, so these rows do not compare Testenix with pytest-xdist or another parallel unittest
+runner. The unittest probe uses the standard-library loader and result semantics, then serializes
+per-test outcomes for parity checking; its timing therefore includes that small audit overhead.
+The no-op unittest wrappers are 7.40× slower than the probe because wrapper, loading, and
+result-adaptation costs dominate an empty body. With 1 ms of synthetic work per unittest method,
+parallel native execution is 1.58× faster in this 64-module layout. Module count and duration are
+therefore material, and none of these synthetic rows predicts a specific real project.
+
+### Raw migration samples and variance
+
+### pytest / no-op
+
+- Source command: `python -m pytest -q -p no:cacheprovider tests`
+- Native command: `python -m testenix run testenix_migrated --workers 4 --no-history`
+- Source median: 1.539 s
+- Source range: 1.519 s–1.573 s;
+  standard deviation: 0.020 s
+- Source raw samples: 1.547, 1.535, 1.539, 1.573, 1.519 seconds
+- Native Testenix median: 0.521 s
+- Native Testenix range: 0.496 s–0.570 s;
+  standard deviation: 0.030 s
+- Native Testenix raw samples: 0.532, 0.498, 0.570, 0.496, 0.521 seconds
+- Native workers: 4
+- Measured rounds: 5; warmups: 1
+- One-time copy, validation, and publication transaction: 5.940 s
+- Integrity gates: 3,000 converted tests, matching source/native outcomes,
+  original SHA-256 values unchanged
+- Recorded at: `2026-07-20T16:38:49.510465+00:00`
+- Source commit: [`3a51a901d268b061e9a87168300b41f3a2714a84`](https://github.com/polishdataengineer/testenix/commit/3a51a901d268b061e9a87168300b41f3a2714a84); worktree clean
+- Lock SHA-256: `8ef0a9258aa5196bf2891f9da9f66c29bcf4e9bf297d178f3d4939cad36130cf`
+- Versions: pytest=9.1.1, python=3.11.14, testenix=0.1.0, unittest=stdlib-3.11.14
+- Environment: cpu_count=14, cpu_model=Apple M4 Pro, machine=arm64, platform=macOS-26.5.1-arm64-arm-64bit, python_implementation=CPython, python_version=3.11.14
+- [Raw JSON](https://github.com/polishdataengineer/testenix/blob/main/benchmarks/migration_baseline_pytest_3000.json)
+
+### unittest / no-op
+
+- Source command: `python -m testenix._unittest_probe --output <project>/.benchmark-unittest.json tests`
+- Native command: `python -m testenix run testenix_migrated --workers 4 --no-history`
+- Source median: 0.161 s
+- Source range: 0.154 s–0.166 s;
+  standard deviation: 0.004 s
+- Source raw samples: 0.161, 0.160, 0.161, 0.154, 0.166 seconds
+- Native Testenix median: 1.192 s
+- Native Testenix range: 1.151 s–1.264 s;
+  standard deviation: 0.051 s
+- Native Testenix raw samples: 1.192, 1.171, 1.256, 1.151, 1.264 seconds
+- Native workers: 4
+- Measured rounds: 5; warmups: 1
+- One-time copy, validation, and publication transaction: 6.742 s
+- Integrity gates: 3,000 converted tests, matching source/native outcomes,
+  original SHA-256 values unchanged
+- Recorded at: `2026-07-20T16:39:05.030979+00:00`
+- Source commit: [`3a51a901d268b061e9a87168300b41f3a2714a84`](https://github.com/polishdataengineer/testenix/commit/3a51a901d268b061e9a87168300b41f3a2714a84); worktree clean
+- Lock SHA-256: `8ef0a9258aa5196bf2891f9da9f66c29bcf4e9bf297d178f3d4939cad36130cf`
+- Versions: pytest=9.1.1, python=3.11.14, testenix=0.1.0, unittest=stdlib-3.11.14
+- Environment: cpu_count=14, cpu_model=Apple M4 Pro, machine=arm64, platform=macOS-26.5.1-arm64-arm-64bit, python_implementation=CPython, python_version=3.11.14
+- [Raw JSON](https://github.com/polishdataengineer/testenix/blob/main/benchmarks/migration_baseline_unittest_3000.json)
+
+### unittest / 1 ms body
+
+- Source command: `python -m testenix._unittest_probe --output <project>/.benchmark-unittest.json tests`
+- Native command: `python -m testenix run testenix_migrated --workers 4 --no-history`
+- Source median: 4.066 s
+- Source range: 4.023 s–4.075 s;
+  standard deviation: 0.021 s
+- Source raw samples: 4.075, 4.063, 4.066, 4.023, 4.067 seconds
+- Native Testenix median: 2.577 s
+- Native Testenix range: 2.454 s–2.644 s;
+  standard deviation: 0.071 s
+- Native Testenix raw samples: 2.577, 2.601, 2.571, 2.454, 2.644 seconds
+- Native workers: 4
+- Measured rounds: 5; warmups: 1
+- One-time copy, validation, and publication transaction: 17.251 s
+- Integrity gates: 3,000 converted tests, matching source/native outcomes,
+  original SHA-256 values unchanged
+- Recorded at: `2026-07-20T16:40:02.708652+00:00`
+- Source commit: [`3a51a901d268b061e9a87168300b41f3a2714a84`](https://github.com/polishdataengineer/testenix/commit/3a51a901d268b061e9a87168300b41f3a2714a84); worktree clean
+- Lock SHA-256: `8ef0a9258aa5196bf2891f9da9f66c29bcf4e9bf297d178f3d4939cad36130cf`
+- Versions: pytest=9.1.1, python=3.11.14, testenix=0.1.0, unittest=stdlib-3.11.14
+- Environment: cpu_count=14, cpu_model=Apple M4 Pro, machine=arm64, platform=macOS-26.5.1-arm64-arm-64bit, python_implementation=CPython, python_version=3.11.14
+- [Raw JSON](https://github.com/polishdataengineer/testenix/blob/main/benchmarks/migration_baseline_unittest_3000_delay_1ms.json)
+
+
 ## Interpretation
 
 The checked-in results show that Testenix has low per-test overhead for large generated suites and
@@ -1279,6 +1760,15 @@ $ uv sync --locked --dev --no-editable
 $ uv run python benchmarks/run_benchmark.py --tests 10000 --workers 4 --repeats 5
 $ uv run python benchmarks/run_benchmark.py --tests 10000 --workers 4 --repeats 5 --uneven
 $ uv run python benchmarks/run_benchmark.py --tests 100000 --workers 4 --repeats 5
+$ uv run python benchmarks/run_migration_benchmark.py --framework pytest --tests 3000 \
+    --modules 64 --workers 4 --warmups 1 --repeats 5 \
+    --output benchmarks/migration_baseline_pytest_3000.json
+$ uv run python benchmarks/run_migration_benchmark.py --framework unittest --tests 3000 \
+    --modules 64 --workers 4 --warmups 1 --repeats 5 \
+    --output benchmarks/migration_baseline_unittest_3000.json
+$ uv run python benchmarks/run_migration_benchmark.py --framework unittest --tests 3000 \
+    --modules 64 --workers 4 --delay-ms 1 --warmups 1 --repeats 5 \
+    --output benchmarks/migration_baseline_unittest_3000_delay_1ms.json
 ```
 
 Review the [benchmarking contract](https://polishdataengineer.github.io/testenix/benchmarking/) before comparing or publishing new data.
@@ -1384,6 +1874,13 @@ These results do not apply to `testenix pytest`. The compatibility command deleg
 has pytest execution performance plus launcher and adapter overhead, which has not yet been
 measured separately.
 
+The new safe-migration baseline is deliberately mixed rather than uniformly positive. For 3,000
+no-op pytest tests across 64 modules, the generated native suite was 2.96x faster than sequential
+pytest. Empty unittest wrappers were 7.40x slower than the sequential stdlib-based outcome probe,
+while the same layout with 1 ms of work in each method was 1.58x faster under four native workers. These are
+synthetic, sequential-source comparisons; they do not establish an advantage over pytest-xdist,
+parallel unittest runners, or a real repository.
+
 ## Environment and method
 
 - Apple M4 Pro, 14 logical CPUs, 24 GiB RAM;
@@ -1420,6 +1917,40 @@ approximately 513 MiB after the final manifest/event optimization. Sequential py
 approximately 520 MiB on the same generated suite. These older macOS `time` figures are not part of
 the current baseline JSON and are process maxima, not aggregate memory across every xdist/Testenix
 child process.
+
+### Migrated-suite measurements
+
+The migration harness generates a source suite, migrates and validates it without modifying any
+source SHA-256, then measures the original source runner and the published native copy in
+alternating rounds. All three checked-in scenarios contain 3,000 tests across 64 modules, use one
+warm-up and five measured rounds, and run native Testenix with four workers on the M4 Pro/CPython
+3.11 environment described above.
+
+| Source runner | Test body | Source median | Native Testenix median | Native vs source | Migration transaction |
+|---|---|---:|---:|---:|---:|
+| sequential pytest | no-op | 1.539 s | 0.521 s | 2.96x faster | 5.940 s |
+| sequential unittest outcome probe | no-op | 0.161 s | 1.192 s | 7.40x slower | 6.742 s |
+| sequential unittest outcome probe | 1 ms sleep | 4.066 s | 2.577 s | 1.58x faster | 17.251 s |
+
+The transaction duration is reported separately from recurring execution. It includes generation,
+the source baseline, serial and parallel native candidates, parity checks, source rehashing, and
+atomic publication. The 1 ms unittest transaction is longer because validation executes the
+synthetic work repeatedly. Conversion is therefore an occasional safety cost, not a per-CI-run
+speedup input.
+
+The no-op unittest row exposes the adapter's fixed cost: each native test is a wrapper that loads
+the unchanged source and translates the result of `TestCase.run()`. The sequential source probe
+uses the stdlib loader and result semantics, then serializes per-test outcomes; it wins
+when the test body does essentially nothing. With 1 ms per method, four-worker execution across 64
+modules amortizes that cost and overtakes the sequential source runner. A suite concentrated in
+one module would expose only one affinity unit, while too many workers can add process and import
+overhead. Test duration, module distribution, imports, fixtures, I/O, failures, operating system,
+and competing parallel runners must all be measured on the target project.
+
+The generated [benchmark results](https://polishdataengineer.github.io/testenix/benchmarks/results/) publish every sample, range, standard
+deviation, command, environment field, and raw JSON link. These three synthetic records are useful
+for finding overhead boundaries; they are not evidence that converted suites are universally
+faster.
 
 ### Worker-count sensitivity
 
@@ -1480,6 +2011,13 @@ and CPython object interaction remain Python work. PyO3 can release the interpre
 performing Rust-only work; it cannot make arbitrary Python callbacks execute in parallel under the
 GIL.
 
+The migration path does not change that decision. Parsing Python ASTs, hashing and copying files,
+and publishing a new directory happen only when regenerating a suite, while most validation time
+comes from executing the source and candidate Python tests. A Rust converter would not shorten a
+1 ms Python test body or `unittest.TestCase.run()`. The empty-unittest result instead points to
+profiling wrapper loading and result adaptation, then optimizing or caching those Python-level
+boundaries without weakening SHA verification and fail-closed publication.
+
 Direction-finding microbenchmarks on this machine showed:
 
 | Candidate | Current signal | Rust/PyO3 result | Decision |
@@ -1510,6 +2048,8 @@ Relevant upstream constraints are documented in the
 - synchronous and asynchronous fixtures, failures, captured output, timeouts, and retries;
 - cold and warm SQLite history runs;
 - real project suites and Linux/macOS/Windows CI runners;
+- real migrated pytest and unittest suites, including sequential and established parallel source
+  runners, multiple module layouts, and a break-even curve by median test duration;
 - checkpoint-batched IPC followed by another profile;
 - persistent workers that collect and execute without importing every module twice.
 
@@ -1547,6 +2087,34 @@ Windows: testenix pytest =========> pytest.console_main -> collector/plugins/exe
 The bridge is a CLI infrastructure adapter, not a native collection adapter. It does not emit
 Testenix events or construct a `RunResult` in version 0.1.
 
+The migration adapter is separate from that handoff. It statically converts a deliberately small
+pytest subset or generates SHA-pinned wrappers around the standard unittest protocol. Its
+application service owns a fail-closed transaction:
+
+```text
+immutable source snapshot
+        |--- original runner in project shadow --------------------> baseline summary
+        |--- generated copy -> native 1-worker shadow ------------> serial summary
+        |--- generated copy -> native parallel shadow ------------> parallel summary
+        +--- per-mapping/count/outcome/hash parity -> no-replace rename -> new output
+```
+
+Converters consume serializable `SourceFile` values and return generated artifacts, mappings, and
+line-addressed diagnostics. They do not access the live filesystem. `migration_fs` is the only
+publication adapter: it rejects link traversal and overlapping paths, creates private same-filesystem
+staging, rehashes the source, and uses an operating-system atomic no-replace primitive. POSIX
+staging creation, writes, publication, and cleanup remain anchored to captured directory identities;
+platforms without safe recursive descriptor deletion retain a non-empty failed staging tree. A
+pre-rename failure has no destination to roll back because the source was never a write target. A
+post-rename durability or audit-report warning is reported as published rather than as a fictional
+rollback.
+
+Unittest wrappers deliberately keep original `TestCase.run()` as the semantic authority. They are
+native scheduler units, but resolve the original through an exact wrapper-relative path and load
+the class only after verifying the complete selected-Python-source SHA-256 manifest.
+This avoids approximating setup, teardown, cleanup, assertion, mocking, async, skip, and expected
+failure behavior.
+
 ## Product contract
 
 Testenix aims to be typed, async-native, parallel-first, deterministic, and lossless when reporting
@@ -1569,6 +2137,8 @@ Authoring API -> supervised collection -> inert manifest -> affinity scheduler -
 - `runner` is the application service connecting the native engine with execution policy.
 - reporters and storage consume completed domain results or versioned events.
 - optional compatibility adapters stay at the CLI boundary; the native core never imports pytest.
+- migration analyzers depend on serializable migration contracts, while shadow execution and
+  atomic publication remain application/infrastructure concerns.
 
 ## Version 0.1 scope
 
@@ -1582,6 +2152,8 @@ Authoring API -> supervised collection -> inert manifest -> affinity scheduler -
 - console, JSON, and JUnit output plus local SQLite duration history;
 - retries represented as immutable attempts and finalized as `FLAKY` when appropriate;
 - an optional platform-aware pytest handoff for unchanged legacy suites.
+- conservative pytest/unittest migration with static diagnostics, differential validation, source
+  fingerprints, and create-only publication.
 
 Remote workers, distributed storage, result caching, automatic quarantine, and a stable third-party
 plugin SDK are deliberately outside version 0.1.
@@ -1625,8 +2197,11 @@ top-level import crash or deadline becomes a `CollectionIssue`, so user import c
 indefinitely block the coordinator. Timed execution units send a ready handshake after rediscovery;
 the test deadline therefore does not include interpreter startup or module import.
 
-Workers create a separate POSIX process session (or use recursive tree termination on Windows).
-Timeout and cancellation terminate descendants started by a test as well as the direct worker.
+Workers normally create a separate POSIX process session (or use recursive tree termination on
+Windows). During migration validation they remain in the validator's process group so an outer
+validation deadline can terminate native workers too. Timeout and cancellation terminate ordinary
+descendants started by a test as well as the direct worker; this is process supervision, not an OS
+sandbox against a test that deliberately detaches itself.
 
 ---
 
@@ -1647,6 +2222,9 @@ Source: docs/roadmap.md
 - Immutable attempts and lossless setup/call/teardown aggregation.
 - Console, JSON, JUnit XML, JSONL events, and SQLite duration history.
 - Optional `testenix pytest` compatibility bridge preserving the real pytest engine and plugins.
+- Safe native migration for a conservative pytest subset and direct unittest TestCase classes,
+  with source fingerprints, disposable validation copies, serial/parallel parity, and atomic
+  create-only publication.
 
 ## 0.2 — fast feedback
 
@@ -1658,7 +2236,8 @@ Source: docs/roadmap.md
 ## 0.3 — adoption
 
 - Pytest hook adapter translating collection and outcomes into Testenix events and `RunResult`.
-- A migration checker and automated transformations for common fixtures and markers.
+- Expand migration beyond the v0.1 static subset only when new transformations have differential
+  semantics tests on real projects.
 - Versioned reporter and selector plugin interfaces.
 - IDE protocol and machine-readable collection manifest.
 
@@ -1692,6 +2271,23 @@ project intends to use Semantic Versioning once its public API reaches stability
   the real pytest collector, fixtures, parametrization, markers, plugins, output, and exit status.
 - Optional `testenix[pytest]` installation extra and a documented native-versus-compatibility
   capability matrix.
+- `testenix migrate {auto,pytest,unittest}` with dry-run, full check, JSON audit reporting, source
+  SHA-256 snapshots, disposable project shadows, serial/parallel differential validation, and
+  atomic create-only publication to a new directory.
+- Conservative pytest transformations for static module functions, cases, simple fixtures,
+  adjacent `conftest.py`, skips, and selection markers, with stable diagnostics for unsupported
+  semantics.
+- Native unittest wrapper generation that retains the original `TestCase.run()` lifecycle and
+  assertions while resolving sources independently of `cwd` and pinning every selected Python
+  module through a SHA-256 manifest.
+- A reproducible migrated-suite benchmark harness for 3,000+ pytest or unittest tests, including
+  count/hash gates, counterbalanced rounds, environment provenance, and raw JSON output.
+- Per-test source-to-target outcome parity, configured parallel validation with an explicit
+  one-affinity-unit warning, bounded descendant cleanup, disjoint create-only audit reports, and
+  descriptor-anchored POSIX staging creation, writes, publication, and cleanup.
+- Truthful post-commit durability/report warnings, package-aware unittest outcome mapping,
+  Testenix validation-worker containment, and conservative blocking of pytest session fixtures and
+  unittest class-cleanup hooks whose lifecycle cannot be preserved.
 
 ## [0.1.0] - 2026-07-20
 
@@ -1808,6 +2404,64 @@ EventSink(*args, **kwargs)
 
 Minimal sink contract used by runners, workers and adapters.
 
+## `testenix.MigrationOptions`
+
+```text
+MigrationOptions(framework: 'Framework', sources: 'tuple[Path, ...]', output: 'Path' = PosixPath('testenix_migrated'), workers: 'WorkerCount' = 'auto', validation_timeout: 'float' = 300.0, dry_run: 'bool' = False, check_only: 'bool' = False, project_root: 'Path | None' = None) -> None
+```
+
+Fields:
+
+- `framework`: `Framework`
+- `sources`: `tuple[Path, ...]`
+- `output`: `Path`
+- `workers`: `WorkerCount`
+- `validation_timeout`: `float`
+- `dry_run`: `bool`
+- `check_only`: `bool`
+- `project_root`: `Path | None`
+
+Validated input for :func:`migrate`.
+
+## `testenix.MigrationReport`
+
+```text
+MigrationReport(status: 'MigrationStatus', mode: 'str', framework: 'str', project_root: 'str', sources: 'tuple[str, ...]', output: 'str', source_hashes: 'Mapping[str, str]', generated_files: 'tuple[str, ...]', mappings: 'tuple[TestMapping, ...]', diagnostics: 'tuple[MigrationDiagnostic, ...]', baseline: 'ValidationSummary | None', native_serial: 'ValidationSummary | None', native_parallel: 'ValidationSummary | None', originals_modified: 'bool', published: 'bool', message: 'str', started_at: 'float', finished_at: 'float') -> None
+```
+
+Fields:
+
+- `status`: `MigrationStatus`
+- `mode`: `str`
+- `framework`: `str`
+- `project_root`: `str`
+- `sources`: `tuple[str, ...]`
+- `output`: `str`
+- `source_hashes`: `Mapping[str, str]`
+- `generated_files`: `tuple[str, ...]`
+- `mappings`: `tuple[TestMapping, ...]`
+- `diagnostics`: `tuple[MigrationDiagnostic, ...]`
+- `baseline`: `ValidationSummary | None`
+- `native_serial`: `ValidationSummary | None`
+- `native_parallel`: `ValidationSummary | None`
+- `originals_modified`: `bool`
+- `published`: `bool`
+- `message`: `str`
+- `started_at`: `float`
+- `finished_at`: `float`
+
+Complete audit record for a migration attempt.
+
+## `testenix.MigrationStatus`
+
+```text
+MigrationStatus(value, names=None, *, module=None, qualname=None, type=None, start=1, boundary=None)
+```
+
+Values: ANALYZED='analyzed', VALIDATED='validated', PUBLISHED='published', UNSUPPORTED='unsupported', VALIDATION_FAILED='validation_failed', SAFETY_ERROR='safety_error'
+
+Terminal state of one migration transaction.
+
 ## `testenix.TestenixConfig`
 
 ```text
@@ -1905,6 +2559,30 @@ Fields:
 
 Serializable description of one concrete test case.
 
+## `testenix.ValidationSummary`
+
+```text
+ValidationSummary(runner: 'str', tests: 'int', passed: 'int', failed: 'int', errors: 'int', skipped: 'int', xfailed: 'int', xpassed: 'int', exit_code: 'int', duration: 'float', timed_out: 'bool' = False, detail: 'str | None' = None, outcomes: 'Mapping[str, str]' = <factory>) -> None
+```
+
+Fields:
+
+- `runner`: `str`
+- `tests`: `int`
+- `passed`: `int`
+- `failed`: `int`
+- `errors`: `int`
+- `skipped`: `int`
+- `xfailed`: `int`
+- `xpassed`: `int`
+- `exit_code`: `int`
+- `duration`: `float`
+- `timed_out`: `bool`
+- `detail`: `str | None`
+- `outcomes`: `Mapping[str, str]`
+
+Framework-neutral outcome counts from one isolated validation run.
+
 ## `testenix.case`
 
 ```text
@@ -1951,6 +2629,18 @@ fixture(function: 'Callable[..., Any] | None' = None, /, *, scope: 'Scope | str'
 ```
 
 Declare a dependency provider with test, module or session lifetime.
+
+## `testenix.migrate`
+
+```text
+migrate(options: 'MigrationOptions') -> 'MigrationReport'
+```
+
+Analyze, validate, and optionally publish a native Testenix copy.
+
+No branch of this function writes to a source path.  A destination is only
+published by a no-overwrite rename after the source fingerprints have been
+checked for concurrent changes.
 
 ## `testenix.run`
 

@@ -14,6 +14,7 @@ description: Testenix is an async-native, parallel-first Python testing framewor
   <div class="testenix-actions">
     <a href="getting-started/">Start testing</a>
     <a href="guides/pytest-compatibility/">Run pytest suites</a>
+    <a href="guides/migration/">Migrate safely</a>
     <a href="benchmarks/results/">See the benchmarks</a>
     <a href="for-llms/">Copy docs for an LLM</a>
   </div>
@@ -25,6 +26,7 @@ description: Testenix is an async-native, parallel-first Python testing framewor
 
 getting-started
 guides/pytest-compatibility
+guides/migration
 guides/writing-tests
 guides/fixtures
 guides/parallelism
@@ -74,6 +76,18 @@ $ testenix pytest -q tests
 
 [Read the compatibility contract](guides/pytest-compatibility/) before migrating individual
 modules to the native engine.
+
+To create a validated native copy without modifying the originals, use:
+
+```console
+$ testenix migrate auto tests --dry-run
+$ testenix migrate auto tests --check
+$ testenix migrate auto tests --output tests_testenix
+```
+
+The migrator executes the source baseline and both serial and parallel native candidates in
+disposable project copies, compares their inventories and outcomes, and publishes only through an
+atomic no-overwrite rename. [Read the safe migration contract](guides/migration/).
 
 ```python
 from collections.abc import AsyncIterator

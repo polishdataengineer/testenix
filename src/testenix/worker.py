@@ -159,7 +159,8 @@ def _terminate_process_tree(process: Any, *, force: bool = False) -> None:
 
 
 def _child_entry(connection: Connection, item: WorkItem) -> None:
-    if os.name == "posix" and hasattr(os, "setsid"):
+    migration_validation = os.environ.get("TESTENIX_MIGRATION_VALIDATION") == "1"
+    if os.name == "posix" and hasattr(os, "setsid") and not migration_validation:
         with contextlib.suppress(OSError):
             os.setsid()
     started_at = time.time()

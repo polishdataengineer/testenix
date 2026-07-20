@@ -13,6 +13,10 @@ $ python -m pip install "testenix[pytest]"
 $ testenix pytest -q tests
 ```
 
+For the supported static subset, `testenix migrate pytest tests` can instead create a validated
+native copy without modifying the source. [The safe migration guide](migration.md) defines its
+strict support and rollback contract.
+
 If a supported pytest (`>=8.3,<10`) is already installed in the same Python environment, installing
 the base `testenix` package is enough. The extra is a convenience for environments that do not
 already contain pytest.
@@ -44,26 +48,24 @@ native `--workers` option into an xdist option.
 
 ## Capability matrix
 
-| Capability | `testenix pytest` | `testenix run` |
-| --- | --- | --- |
-| Plain module-level `test_*` functions | Yes, through pytest | Yes |
-| Pytest classes and unittest-style tests | Yes | No |
-| `pytest.fixture` and built-in fixtures | Yes | No |
-| `conftest.py` fixture and hook discovery | Yes | No |
-| `pytest.mark.parametrize` | Yes | No; use Testenix `@case` or `@cases` |
-| Pytest skip, xfail, and custom markers | Yes | No; use Testenix decorators and tags |
-| Pytest assertion rewriting | Yes | No |
-| Pytest plugins and hooks | Yes, when installed in the same environment | No |
-| `pytest.ini` and `[tool.pytest.ini_options]` | Yes | No |
-| Pytest node IDs and CLI selectors | Yes | No |
-| pytest-xdist | Yes, when installed and requested with `-n` | No; use native `--workers` |
-| Async tests | According to the installed pytest plugins | Native, without a plugin |
-| Testenix retries and `FLAKY` semantics | No | Yes |
-| Testenix duration history and scheduling | No | Yes |
-| Testenix lossless result model | No | Yes |
-| Testenix JSON/JUnit reporters | No; use pytest options or plugins | Yes |
-| Published native Testenix speedups | No | Only for the documented workloads |
-| Exit status | Unchanged pytest or plugin status | Testenix exit-code contract |
+| Capability | `testenix pytest` | `migrate` then `run` | Direct `testenix run` |
+| --- | --- | --- | --- |
+| Plain module-level pytest-default `test*` functions | Yes, through pytest | Yes | `test_` or native `@test` |
+| Pytest classes | Yes | Blocked | No |
+| Simple local fixture | Yes | Converted | Only native `@fixture` |
+| Session-scoped pytest fixture | Yes | Blocked: run-global vs worker-local | Native scope is worker-local |
+| Built-in/dynamic fixture | Yes | Blocked | No pytest fixture semantics |
+| Adjacent `conftest.py` fixture | Yes | Simple static subset | No automatic conftest discovery |
+| Static single `parametrize` | Yes | Converted to cases | Use `@case` or `@cases` |
+| Skip and plain custom marker | Yes | Converted | Use Testenix decorators/tags |
+| Pytest xfail | Yes | Blocked due semantic differences | Use native `@xfail` intentionally |
+| Pytest assertion rewriting | Yes | No | No |
+| Plugins, hooks, pytest config | Yes | Blocked/not translated | No |
+| Async plugin semantics | According to plugins | Blocked | Native async needs no plugin |
+| Testenix worker scheduler/history | No | Yes after migration | Yes |
+| Testenix retries and lossless results | No | Yes after migration | Yes |
+| Published native speedups | No | Measure generated suite | Only documented workloads |
+| Source preservation | Runs source | Source stays untouched | Not applicable |
 
 Some simple pytest-authored functions also happen to run with `testenix run`, but that overlap is
 not a compatibility guarantee. In particular, the native collector does not interpret pytest
@@ -104,15 +106,19 @@ be used to describe `testenix pytest`.
 ## Migration path
 
 Use the bridge first to put Testenix in front of an unchanged suite without altering its semantics.
-Migrate individual modules to native Testenix only when their pytest dependencies have explicit
-equivalents:
+Then let the conservative migrator identify and validate modules whose pytest dependencies have
+explicit equivalents:
 
 1. keep the whole suite green with `testenix pytest`;
-2. replace pytest fixtures with Testenix `@fixture` providers;
-3. replace `parametrize` with `@case` or `@cases`;
-4. replace pytest markers with Testenix tags, `@skip`, and `@xfail`;
-5. run migrated modules with `testenix run` and leave the remainder on the bridge;
-6. compare behavior before making native performance claims.
+2. run `testenix migrate pytest tests --dry-run` and inspect every diagnostic;
+3. use `--check --report-json ...` to execute the source, serial native, and parallel native gates;
+4. publish to a new directory only after all three inventories/outcomes agree;
+5. keep unsupported modules on `testenix pytest` and keep all originals during rollout;
+6. benchmark the generated directory before making a native performance claim.
+
+The migrator replaces simple fixtures, parametrization, skip conditions, and plain markers in the
+generated copy. It never performs edits in place. Manual rewrites are still necessary for blocked
+plugin, hook, built-in fixture, class, xfail, and dynamic behavior.
 
 The current bridge does not convert pytest outcomes into a Testenix `RunResult`. Deeper event and
 report aggregation is a future compatibility layer and requires explicit pytest hook integration.

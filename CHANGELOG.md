@@ -11,6 +11,23 @@ project intends to use Semantic Versioning once its public API reaches stability
   the real pytest collector, fixtures, parametrization, markers, plugins, output, and exit status.
 - Optional `testenix[pytest]` installation extra and a documented native-versus-compatibility
   capability matrix.
+- `testenix migrate {auto,pytest,unittest}` with dry-run, full check, JSON audit reporting, source
+  SHA-256 snapshots, disposable project shadows, serial/parallel differential validation, and
+  atomic create-only publication to a new directory.
+- Conservative pytest transformations for static module functions, cases, simple fixtures,
+  adjacent `conftest.py`, skips, and selection markers, with stable diagnostics for unsupported
+  semantics.
+- Native unittest wrapper generation that retains the original `TestCase.run()` lifecycle and
+  assertions while resolving sources independently of `cwd` and pinning every selected Python
+  module through a SHA-256 manifest.
+- A reproducible migrated-suite benchmark harness for 3,000+ pytest or unittest tests, including
+  count/hash gates, counterbalanced rounds, environment provenance, and raw JSON output.
+- Per-test source-to-target outcome parity, configured parallel validation with an explicit
+  one-affinity-unit warning, bounded descendant cleanup, disjoint create-only audit reports, and
+  descriptor-anchored POSIX staging creation, writes, publication, and cleanup.
+- Truthful post-commit durability/report warnings, package-aware unittest outcome mapping,
+  Testenix validation-worker containment, and conservative blocking of pytest session fixtures and
+  unittest class-cleanup hooks whose lifecycle cannot be preserved.
 
 ## [0.1.0] - 2026-07-20
 

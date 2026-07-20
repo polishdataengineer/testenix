@@ -54,6 +54,19 @@ lossless reports. The two commands have deliberately separate semantics. See
 [pytest compatibility](guides/pytest-compatibility.md) for the capability matrix and migration
 boundary.
 
+Create a validated native copy of supported pytest or unittest modules without changing the
+originals:
+
+```console
+$ testenix migrate auto tests --dry-run
+$ testenix migrate auto tests --output tests_testenix
+$ testenix run tests_testenix
+```
+
+Migration requires a green source run and matching serial/parallel native runs before an atomic
+new-directory publish. Read [safe migration](guides/migration.md) before using it on a suite with
+external side effects.
+
 ## Create a native test
 
 Testenix collects ordinary functions whose names begin with `test_`. Decorators are optional for
@@ -135,6 +148,7 @@ collection and execution process trees before control returns to the caller.
 
 - [Write tests, cases, tags, skips, and expected failures](guides/writing-tests.md)
 - [Run or migrate an existing pytest suite](guides/pytest-compatibility.md)
+- [Convert pytest or unittest safely without replacing originals](guides/migration.md)
 - [Build fixture graphs](guides/fixtures.md)
 - [Understand process parallelism and timeouts](guides/parallelism.md)
 - [Produce JSON and JUnit reports](guides/reports.md)

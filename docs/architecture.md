@@ -20,6 +20,34 @@ Windows: testenix pytest =========> pytest.console_main -> collector/plugins/exe
 The bridge is a CLI infrastructure adapter, not a native collection adapter. It does not emit
 Testenix events or construct a `RunResult` in version 0.1.
 
+The migration adapter is separate from that handoff. It statically converts a deliberately small
+pytest subset or generates SHA-pinned wrappers around the standard unittest protocol. Its
+application service owns a fail-closed transaction:
+
+```text
+immutable source snapshot
+        |--- original runner in project shadow --------------------> baseline summary
+        |--- generated copy -> native 1-worker shadow ------------> serial summary
+        |--- generated copy -> native parallel shadow ------------> parallel summary
+        +--- per-mapping/count/outcome/hash parity -> no-replace rename -> new output
+```
+
+Converters consume serializable `SourceFile` values and return generated artifacts, mappings, and
+line-addressed diagnostics. They do not access the live filesystem. `migration_fs` is the only
+publication adapter: it rejects link traversal and overlapping paths, creates private same-filesystem
+staging, rehashes the source, and uses an operating-system atomic no-replace primitive. POSIX
+staging creation, writes, publication, and cleanup remain anchored to captured directory identities;
+platforms without safe recursive descriptor deletion retain a non-empty failed staging tree. A
+pre-rename failure has no destination to roll back because the source was never a write target. A
+post-rename durability or audit-report warning is reported as published rather than as a fictional
+rollback.
+
+Unittest wrappers deliberately keep original `TestCase.run()` as the semantic authority. They are
+native scheduler units, but resolve the original through an exact wrapper-relative path and load
+the class only after verifying the complete selected-Python-source SHA-256 manifest.
+This avoids approximating setup, teardown, cleanup, assertion, mocking, async, skip, and expected
+failure behavior.
+
 ## Product contract
 
 Testenix aims to be typed, async-native, parallel-first, deterministic, and lossless when reporting
@@ -42,6 +70,8 @@ Authoring API -> supervised collection -> inert manifest -> affinity scheduler -
 - `runner` is the application service connecting the native engine with execution policy.
 - reporters and storage consume completed domain results or versioned events.
 - optional compatibility adapters stay at the CLI boundary; the native core never imports pytest.
+- migration analyzers depend on serializable migration contracts, while shadow execution and
+  atomic publication remain application/infrastructure concerns.
 
 ## Version 0.1 scope
 
@@ -55,6 +85,8 @@ Authoring API -> supervised collection -> inert manifest -> affinity scheduler -
 - console, JSON, and JUnit output plus local SQLite duration history;
 - retries represented as immutable attempts and finalized as `FLAKY` when appropriate;
 - an optional platform-aware pytest handoff for unchanged legacy suites.
+- conservative pytest/unittest migration with static diagnostics, differential validation, source
+  fingerprints, and create-only publication.
 
 Remote workers, distributed storage, result caching, automatic quarantine, and a stable third-party
 plugin SDK are deliberately outside version 0.1.
@@ -98,5 +130,8 @@ top-level import crash or deadline becomes a `CollectionIssue`, so user import c
 indefinitely block the coordinator. Timed execution units send a ready handshake after rediscovery;
 the test deadline therefore does not include interpreter startup or module import.
 
-Workers create a separate POSIX process session (or use recursive tree termination on Windows).
-Timeout and cancellation terminate descendants started by a test as well as the direct worker.
+Workers normally create a separate POSIX process session (or use recursive tree termination on
+Windows). During migration validation they remain in the validator's process group so an outer
+validation deadline can terminate native workers too. Timeout and cancellation terminate ordinary
+descendants started by a test as well as the direct worker; this is process supervision, not an OS
+sandbox against a test that deliberately detaches itself.
