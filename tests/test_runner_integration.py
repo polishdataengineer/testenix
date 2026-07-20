@@ -201,7 +201,10 @@ def test_run_async_cancellation_reaps_active_worker(tmp_path: Path) -> None:
         from pathlib import Path
 
         def test_blocks_until_cancelled():
-            Path({str(pid_path)!r}).write_text(str(os.getpid()), encoding="utf-8")
+            pid_path = Path({str(pid_path)!r})
+            pending_pid_path = pid_path.with_suffix(".pending")
+            pending_pid_path.write_text(str(os.getpid()), encoding="utf-8")
+            pending_pid_path.replace(pid_path)
             time.sleep(30)
         """,
     )
@@ -240,7 +243,10 @@ def test_run_async_cancellation_reaps_collection_worker(tmp_path: Path) -> None:
         import time
         from pathlib import Path
 
-        Path({str(pid_path)!r}).write_text(str(os.getpid()), encoding="utf-8")
+        pid_path = Path({str(pid_path)!r})
+        pending_pid_path = pid_path.with_suffix(".pending")
+        pending_pid_path.write_text(str(os.getpid()), encoding="utf-8")
+        pending_pid_path.replace(pid_path)
         time.sleep(30)
 
         def test_never_collected():
