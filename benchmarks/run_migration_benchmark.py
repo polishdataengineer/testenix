@@ -425,7 +425,7 @@ def _migrate_project(
     environment: dict[str, str],
 ) -> tuple[dict[str, Any], ProcessOutcome, dict[str, str]]:
     report_path = project / "migration-report.json"
-    command = _migration_command(framework, workers, report_path)
+    command = _migration_command(framework, workers, Path("migration-report.json"))
     outcome = _run_process(command, project=project, environment=environment)
     spec = RunnerSpec("testenix migrate", command, "native", report_path)
     if outcome.returncode != 0:
