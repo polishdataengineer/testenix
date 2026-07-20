@@ -20,8 +20,12 @@ claims require at least five runs per configuration and must publish the environ
 The current v0.1 harness automates wall-clock samples and the environment fingerprint across 16
 generated modules for a four-worker run. It also validates the completed test count, rotates runner
 order between measured rounds, supports an explicit module count, and records throughput, mean, and
-standard deviation. The remaining telemetry above is the acceptance contract for the next harness
-iteration, not data claimed by the checked-in baseline files.
+standard deviation. Pytest plugin autoloading and its cache provider are disabled, pytest-xdist is
+loaded explicitly, and every tool runs from the generated suite directory so repository-level
+pytest configuration does not affect the comparison. New output also records the commit, dirty
+state, lockfile hash, timestamp, and installed framework versions. The remaining telemetry above is
+the acceptance contract for the next harness iteration, not data claimed by the checked-in baseline
+files.
 
 Correctness wins over speed: a run with a missing, duplicated, or incorrectly finalized result is
 invalid and excluded from performance comparisons.
@@ -34,7 +38,16 @@ uv run python benchmarks/run_benchmark.py --tests 1000 --workers 4 --repeats 5 -
 uv run python benchmarks/run_benchmark.py --tests 10000 --modules 1000 --workers 4 --repeats 5
 ```
 
+Maintainers can run the same comparison from GitHub's **Benchmarks** workflow and download its raw
+JSON artifact. Shared GitHub runners are appropriate for reproducibility checks, not for silently
+replacing the approved marketing baseline: their timing variance is outside this project's control.
+
 The checked-in baseline files are development evidence, not universal performance claims. See
 `docs/performance-analysis.md` for the current large-suite results, optimization profile, memory
 notes, and native-code decision. Real project suites and cross-platform repetitions remain required
 before publishing broad comparative claims.
+
+An approved public baseline must be committed through a reviewed pull request. Do not remove slow
+but valid samples as outliers; invalid commands remain evidence and must be explained. The
+100,000-test development file currently has only three measured rounds and no warmup, so it is
+published transparently but does not satisfy the five-run minimum above.

@@ -3,10 +3,12 @@
 ## Executive summary
 
 The optimized v0.1 runner is faster than pytest and pytest-xdist in the checked-in synthetic
-large-suite scenarios. The strongest validated comparison is 100,000 passing tests across 16
-modules: Testenix completed the suite in a median 11.957 seconds, pytest in 33.957 seconds, and
-pytest-xdist in 44.322 seconds. Every measured command had to report the expected test count or
-the harness rejected the sample.
+large-suite scenarios. The largest recorded comparison is 100,000 passing tests across 16 modules:
+Testenix completed the suite in a median 11.957 seconds, pytest in 33.957 seconds, and pytest-xdist
+in 44.322 seconds. Every measured command had to report the expected test count or the harness
+rejected the sample. This 100,000-test result is preliminary because it has only three rounds, no
+warmup, and a wide Testenix range; it does not yet satisfy the project's five-run publication
+contract.
 
 This is evidence for the tested workload and machine, not a universal claim about every Python
 project. Import-heavy suites, fixture-heavy suites, slow tests, failure output, different operating

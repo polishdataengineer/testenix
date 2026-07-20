@@ -12,6 +12,7 @@ concurrency:
 
 jobs:
   build:
+    name: Build and verify distributions
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -19,6 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          fetch-depth: 0
           persist-credentials: false
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
@@ -30,6 +32,12 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: test "$RELEASE_TAG" = "v$(uv version --short)"
+      - name: Verify release commit belongs to main
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "::error::The release tag must point to a commit contained in main"
+            exit 1
+          fi
       - run: uv sync --locked --dev --no-editable
       - run: uv run --no-editable pytest
       - run: uv run --no-editable ruff check .
@@ -54,6 +62,7 @@ jobs:
           retention-days: 5
 
   publish:
+    name: Publish to PyPI
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -61,7 +70,7 @@ jobs:
       name: pypi
       url: https://pypi.org/p/testenix
     permissions:
-      id-token: write
+      id-token: write # Authenticate to PyPI via Trusted Publishing.
     steps:
       - name: Download distributions
         uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
@@ -69,6 +78,6 @@ jobs:
           name: python-package-distributions
           path: dist/
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
+        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # v1.14.1
         with:
           packages-dir: dist/

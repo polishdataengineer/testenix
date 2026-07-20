@@ -15,3 +15,6 @@ htmlcov/
 .testenix/
 build/
 dist/
+site/
+.playwright-cli/
+output/

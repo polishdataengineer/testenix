@@ -1,0 +1,1749 @@
+# Testenix complete documentation
+
+> Generated from the Testenix repository. Treat current 0.1 behavior separately from roadmap items, and treat every benchmark as workload-specific.
+
+Canonical documentation: https://polishdataengineer.github.io/testenix/
+Source repository: https://github.com/polishdataengineer/testenix
+
+---
+
+# Document: Overview
+
+Canonical URL: https://polishdataengineer.github.io/testenix/
+Source: docs/index.md
+
+---
+description: Testenix is an async-native, parallel-first Python testing framework with lossless results.
+---
+
+# Testenix
+
+<div class="testenix-hero">
+  <div class="testenix-kicker">Python testing framework · Alpha</div>
+  <div class="testenix-title">Fast tests. Clear results.</div>
+  <p>
+    Testenix unifies synchronous and asynchronous tests, fixtures, local parallelism,
+    retries, crash recovery, and machine-readable reports in one dependency-free runtime.
+  </p>
+  <div class="testenix-actions">
+    <a href="https://polishdataengineer.github.io/testenix/getting-started/">Start testing</a>
+    <a href="https://polishdataengineer.github.io/testenix/benchmarks/results/">See the benchmarks</a>
+    <a href="https://polishdataengineer.github.io/testenix/for-llms/">Copy docs for an LLM</a>
+  </div>
+</div>
+
+```{toctree}
+:hidden:
+:maxdepth: 2
+
+getting-started
+guides/writing-tests
+guides/fixtures
+guides/parallelism
+guides/reports
+reference/cli
+reference/configuration
+reference/api
+benchmarks/results
+benchmarking
+performance-analysis
+architecture
+roadmap
+for-llms
+```
+
+## Why Testenix
+
+<div class="metric-grid">
+  <div class="metric-card"><strong>0</strong><span>third-party runtime dependencies</span></div>
+  <div class="metric-card"><strong>12</strong><span>Python and OS combinations in CI</span></div>
+  <div class="metric-card"><strong>3</strong><span>console, JSON, and JUnit reports</span></div>
+  <div class="metric-card"><strong>2.84×</strong><span>preliminary 100k synthetic throughput vs pytest</span></div>
+</div>
+
+Testenix is deliberately built around a few strong guarantees:
+
+- **Async is native.** Coroutine tests and async-generator fixtures use the same model as
+  synchronous code and do not require a plugin.
+- **Parallelism is part of the runner.** Module affinity, process isolation, and
+  duration-aware scheduling are designed together.
+- **Retries preserve evidence.** A failed attempt followed by a pass is `FLAKY`, never silently
+  rewritten as a clean pass.
+- **Crashes cannot erase completed work.** Workers stream results as tests finish, and unfinished
+  tests receive explicit terminal outcomes.
+- **Reports share one model.** Console, JSON, JUnit, history, and the library API are derived from
+  the same versioned result contracts.
+
+## A complete first test
+
+```python
+from collections.abc import AsyncIterator
+
+from testenix import case, cases, fixture, test
+
+
+@fixture(scope="module")
+async def multiplier() -> AsyncIterator[int]:
+    yield 2
+
+
+@test("multiplication uses an async fixture", tags={"unit"})
+@cases(
+    case(id="positive", value=3, expected=6),
+    case(id="zero", value=0, expected=0),
+)
+async def multiplication(multiplier: int, value: int, expected: int) -> None:
+    assert multiplier * value == expected
+```
+
+Run it locally:
+
+```console
+$ python -m pip install testenix
+$ testenix run tests
+```
+
+If the first PyPI release is not available yet, install the current source with
+`python -m pip install "testenix @ git+https://github.com/polishdataengineer/testenix.git@main"`.
+
+## Performance evidence, with context
+
+The checked-in development baseline measured 100,000 empty tests across 16 generated modules on
+an Apple M4 Pro and CPython 3.11. Testenix completed that specific workload in a median 11.96
+seconds, compared with 33.96 seconds for pytest and 44.32 seconds for pytest-xdist.
+
+<div class="benchmark-caveat">
+This is a preliminary synthetic result from one machine, not a promise that every project will be
+2.84× faster. The benchmark page publishes the raw samples, environment, variance, methodology,
+and limitations so that the claim can be evaluated rather than taken on trust.
+</div>
+
+[Inspect the benchmark data](https://polishdataengineer.github.io/testenix/benchmarks/results/) or
+[reproduce the harness](https://polishdataengineer.github.io/testenix/benchmarking/).
+
+## Project maturity
+
+Testenix is alpha software and is not yet a drop-in pytest replacement. Pytest has a much broader
+plugin ecosystem, richer IDE integration, and mature assertion rewriting. Testenix is a good fit
+when its native async model, built-in parallel execution, explicit failure semantics, or
+dependency-free runtime are more important than ecosystem compatibility.
+
+---
+
+# Document: Getting started
+
+Canonical URL: https://polishdataengineer.github.io/testenix/getting-started/
+Source: docs/getting-started.md
+
+# Getting started
+
+This guide takes a new project from installation to its first parallel Testenix run.
+
+## Requirements
+
+- CPython 3.11 or newer
+- Linux, macOS, or Windows
+- no runtime dependencies beyond the Python standard library
+
+## Install
+
+Install the released package from PyPI:
+
+```console
+$ python -m pip install testenix
+$ testenix --version
+```
+
+For a project managed by uv:
+
+```console
+$ uv add --dev testenix
+$ uv run testenix --version
+```
+
+Until the first PyPI release is visible, install directly from the protected `main` branch:
+
+```console
+$ python -m pip install "testenix @ git+https://github.com/polishdataengineer/testenix.git@main"
+```
+
+## Create a test
+
+Testenix collects ordinary functions whose names begin with `test_`. Decorators are optional for
+simple tests.
+
+```python
+# tests/test_math.py
+
+def test_addition() -> None:
+    assert 2 + 2 == 4
+```
+
+Run the suite:
+
+```console
+$ testenix run tests
+```
+
+The process exits with code `0` when every selected test has a non-gating terminal status.
+
+## Add native metadata
+
+Use `@test` when a description, tags, or a hard timeout should be part of the test contract.
+
+```python
+from testenix import test
+
+
+@test("addition remains correct", tags={"unit", "fast"}, timeout=2.0)
+def addition() -> None:
+    assert 2 + 2 == 4
+```
+
+Select tagged tests by repeating `--tag`. Repeated tags use AND semantics:
+
+```console
+$ testenix run --tag unit --tag fast
+```
+
+## Configure the project
+
+Put stable defaults in `pyproject.toml`:
+
+```toml
+[tool.testenix]
+paths = ["tests"]
+workers = "auto"
+retries = 0
+history = ".testenix/history.sqlite3"
+# timeout = 10
+# json = "reports/testenix.json"
+# junit = "reports/junit.xml"
+```
+
+Command-line values override the project table:
+
+```console
+$ testenix run --workers 4 --retries 1 --json reports/result.json
+```
+
+Use `--no-history` for a side-effect-free run. Duration history normally helps later runs schedule
+long tests earlier.
+
+## Use it from Python
+
+The runner also exposes a typed API:
+
+```python
+from testenix import Status, TestenixConfig, run
+
+result = run("tests", TestenixConfig(workers=4, history_path=None))
+failed = [item.test.id for item in result.tests if item.status is not Status.PASS]
+```
+
+Async applications can call `await testenix.run_async(...)`. Cancellation terminates active
+collection and execution process trees before control returns to the caller.
+
+## Next steps
+
+- [Write tests, cases, tags, skips, and expected failures](https://polishdataengineer.github.io/testenix/guides/writing-tests/)
+- [Build fixture graphs](https://polishdataengineer.github.io/testenix/guides/fixtures/)
+- [Understand process parallelism and timeouts](https://polishdataengineer.github.io/testenix/guides/parallelism/)
+- [Produce JSON and JUnit reports](https://polishdataengineer.github.io/testenix/guides/reports/)
+- [Review every configuration option](https://polishdataengineer.github.io/testenix/reference/configuration/)
+
+---
+
+# Document: Writing tests
+
+Canonical URL: https://polishdataengineer.github.io/testenix/guides/writing-tests/
+Source: docs/guides/writing-tests.md
+
+# Writing tests
+
+Testenix tests are ordinary typed functions. Discovery recognizes `test_*` names, while decorators
+add explicit metadata without wrapping or changing the callable.
+
+## Plain functions
+
+```python
+def test_total() -> None:
+    assert sum([2, 3, 5]) == 10
+```
+
+Both synchronous functions and coroutines are supported:
+
+```python
+async def test_async_client() -> None:
+    response = await fetch_record(42)
+    assert response["id"] == 42
+```
+
+## Descriptions, tags, and timeouts
+
+```python
+from testenix import test
+
+
+@test(
+    "the cache expires stale entries",
+    tags={"unit", "cache"},
+    timeout=1.5,
+)
+async def cache_expiry() -> None:
+    ...
+```
+
+The decorator attaches immutable metadata and preserves the original function signature,
+annotations, and traceback.
+
+A timeout is a hard process deadline. This is more expensive than shared-worker execution, but it
+can stop both a blocked coroutine and a blocking synchronous call.
+
+## Parameter cases
+
+Use `case` for named examples:
+
+```python
+from testenix import case, cases, test
+
+
+@test("discount rules")
+@cases(
+    case("regular", amount=100, rate=0.0, expected=100),
+    case("member", amount=100, rate=0.1, expected=90),
+)
+def discount(amount: int, rate: float, expected: float) -> None:
+    assert amount * (1 - rate) == expected
+```
+
+Use keyword dimensions to create a Cartesian product:
+
+```python
+@cases(
+    role=["admin", "editor"],
+    active=[True, False],
+)
+def test_permissions(role: str, active: bool) -> None:
+    ...
+```
+
+Case values are rebuilt when the worker rediscovers the module, so they do not need to cross the
+process boundary through pickle. They must still be reproducible during module import.
+
+## Skip and expected failure
+
+```python
+import sys
+
+from testenix import skip, xfail
+
+
+@skip("Windows-only behavior", when=sys.platform != "win32")
+def test_windows_registry() -> None:
+    ...
+
+
+@xfail("tracked as issue #42")
+def test_known_edge_case() -> None:
+    assert current_behavior() == desired_behavior()
+```
+
+An expected failure becomes `XFAIL`. If the test unexpectedly passes, the result is `XPASS` and
+gates the run.
+
+## Retries and flakiness
+
+Retries can be configured globally or on the command line:
+
+```console
+$ testenix run --retries 2
+```
+
+Every attempt remains in the result model. `FAIL -> PASS` is finalized as `FLAKY` and returns a
+gating exit code; Testenix never hides the initial failure.
+
+## Tags
+
+Tags are normalized strings stored in the test specification:
+
+```python
+@test(tags={"integration", "database"})
+def database_round_trip() -> None:
+    ...
+```
+
+Run tests containing every requested tag:
+
+```console
+$ testenix run --tag integration --tag database
+```
+
+An explicit tag filter that selects no tests is treated as a usage error and exits with code `2`.
+
+---
+
+# Document: Fixtures
+
+Canonical URL: https://polishdataengineer.github.io/testenix/guides/fixtures/
+Source: docs/guides/fixtures.md
+
+# Fixtures
+
+Fixtures are typed dependency providers. A test requests a fixture by using its name as a function
+parameter.
+
+## Return-value fixtures
+
+```python
+from testenix import fixture
+
+
+@fixture
+def customer_id() -> int:
+    return 42
+
+
+def test_customer(customer_id: int) -> None:
+    assert customer_id > 0
+```
+
+## Cleanup with generators
+
+Synchronous and asynchronous generator fixtures run cleanup after the consumer:
+
+```python
+from collections.abc import AsyncIterator
+
+from testenix import fixture
+
+
+@fixture
+async def client() -> AsyncIterator[Client]:
+    value = await Client.connect()
+    try:
+        yield value
+    finally:
+        await value.close()
+```
+
+Setup, call, and teardown are separate result phases. A teardown failure remains visible even when
+the test body passed.
+
+## Fixture dependencies
+
+Fixtures can request other fixtures:
+
+```python
+@fixture
+def database_url() -> str:
+    return "sqlite:///:memory:"
+
+
+@fixture
+def repository(database_url: str) -> Repository:
+    return Repository(database_url)
+
+
+def test_empty_repository(repository: Repository) -> None:
+    assert repository.count() == 0
+```
+
+The dependency graph is validated before execution. Missing fixtures and cycles become collection
+issues instead of hanging the run.
+
+## Scopes
+
+```python
+@fixture(scope="module")
+def module_resource() -> Resource:
+    return Resource()
+
+
+@fixture(scope="session")
+def worker_resource() -> Resource:
+    return Resource()
+```
+
+| Scope | Lifetime in Testenix 0.1 |
+| --- | --- |
+| `test` | One instance for one concrete test attempt. |
+| `module` | Shared by normal tests from the module inside one worker. |
+| `session` | Shared by normal tests assigned to one worker process. |
+
+Session scope is currently worker-local, not a single process-global instance. Timed tests run in
+dedicated processes and therefore receive isolated module/session fixtures.
+
+## Custom fixture names
+
+```python
+@fixture(name="api")
+def build_client() -> Client:
+    return Client()
+
+
+def test_health(api: Client) -> None:
+    assert api.health() == "ok"
+```
+
+The custom name changes dependency lookup without changing the Python function.
+
+---
+
+# Document: Parallel execution
+
+Canonical URL: https://polishdataengineer.github.io/testenix/guides/parallelism/
+Source: docs/guides/parallelism.md
+
+# Parallel execution
+
+Testenix treats local parallelism as part of the execution model rather than an optional plugin.
+
+## Choose the worker count
+
+```console
+$ testenix run --workers auto
+$ testenix run --workers 4
+$ testenix run --workers 1
+```
+
+`auto` resolves to the logical CPU count reported by Python. For CI and benchmark runs, an explicit
+count makes resource use and results easier to reproduce.
+
+## Scheduling
+
+Normal tests from one module form an affinity unit and execute in the same persistent worker. This
+preserves module-fixture reuse and avoids splitting hidden module state between processes.
+
+When duration history exists, Testenix schedules longer units first. This longest-processing-time
+strategy is deterministic and reduces the chance that one slow shard becomes the tail of the run.
+
+## Process isolation
+
+Workers are spawned processes. A worker streams each completed attempt to the coordinator before
+starting the next test. If the worker later crashes:
+
+- completed results remain authoritative;
+- unfinished tests receive explicit crash or infrastructure outcomes;
+- the crashed unit receives one framework recovery attempt;
+- `CRASH -> PASS` is still finalized as `FLAKY`.
+
+The coordinator never infers that a missing result passed.
+
+## Hard timeouts
+
+Any test with an explicit or global timeout runs in its own supervised process:
+
+```python
+from testenix import test
+
+
+@test(timeout=2)
+def test_external_tool() -> None:
+    call_external_tool()
+```
+
+This boundary allows Testenix to terminate a blocking synchronous call as well as a stuck
+coroutine. Descendant processes are terminated with the timed-out worker.
+
+The trade-off is fixture reuse: a timed test cannot share module/session fixture instances with
+neighbouring tests.
+
+## Cancellation
+
+The async library API is cancellation-aware:
+
+```python
+import asyncio
+
+from testenix import TestenixConfig, run_async
+
+
+async def main() -> None:
+    result = await run_async(("tests",), TestenixConfig(workers=4))
+    print(result.exit_code)
+
+
+asyncio.run(main())
+```
+
+Cancelling `run_async` terminates active collection and execution process trees before the
+coroutine returns control.
+
+## Platform note
+
+On Windows, scripts that call `run()` or `run_async()` directly must use the standard
+multiprocessing guard:
+
+```python
+if __name__ == "__main__":
+    main()
+```
+
+The `testenix` command-line program handles process startup itself.
+
+---
+
+# Document: Reports and history
+
+Canonical URL: https://polishdataengineer.github.io/testenix/guides/reports/
+Source: docs/guides/reports.md
+
+# Reports and history
+
+Every output adapter consumes the same immutable run result. A status cannot be green in the
+console and red in JSON because both are derived from one model.
+
+## Console
+
+The console report is always enabled:
+
+```console
+$ testenix run tests
+```
+
+It prints test outcomes, failure details, and a final summary suitable for local development.
+
+## JSON
+
+```console
+$ testenix run --json reports/testenix.json
+```
+
+The JSON report preserves the complete hierarchy:
+
+```text
+run
+└── test
+    └── attempt
+        ├── setup
+        ├── call
+        └── teardown
+```
+
+Consumers can distinguish failed assertions, setup errors, teardown errors, timeouts, crashes,
+expected failures, unexpected passes, flaky retries, and framework infrastructure errors.
+
+## JUnit XML
+
+```console
+$ testenix run --junit reports/junit.xml
+```
+
+JUnit XML is designed for CI systems that already understand the common test-report format.
+Testenix-specific identifiers and statuses are retained as properties where JUnit has no exact
+equivalent.
+
+## Duration history
+
+By default, duration history is stored in `.testenix/history.sqlite3`. Later runs use the estimates
+to schedule longer work earlier.
+
+Choose a custom location:
+
+```console
+$ testenix run --history .cache/testenix.sqlite3
+```
+
+Disable all history writes:
+
+```console
+$ testenix run --no-history
+```
+
+History changes scheduling estimates, not test semantics. A test is never skipped or treated as
+passing because of a historical record.
+
+## Configure report paths
+
+```toml
+[tool.testenix]
+json = "reports/testenix.json"
+junit = "reports/junit.xml"
+history = ".testenix/history.sqlite3"
+```
+
+CLI options override these paths for the current run.
+
+## Exit codes
+
+| Code | Meaning |
+| ---: | --- |
+| `0` | No gating failure. |
+| `1` | Test failure, error, timeout, crash, unexpected pass, or flaky result. |
+| `2` | Collection, command, configuration, or empty explicit selection error. |
+| `3` | Internal runner, report, or history error. |
+| `130` | Interrupted by the user. |
+
+---
+
+# Document: CLI reference
+
+Canonical URL: https://polishdataengineer.github.io/testenix/reference/cli/
+Source: docs/reference/cli.md
+
+# Command-line reference
+
+## Top-level command
+
+```text
+testenix [-h] [--version] [--config PYPROJECT] {run} ...
+```
+
+| Option | Description |
+| --- | --- |
+| `-h`, `--help` | Show command help. |
+| `--version` | Print the installed Testenix version. |
+| `--config PATH` | Load `[tool.testenix]` from a specific pyproject file. |
+
+## `testenix run`
+
+```text
+testenix run [PATH ...]
+             [--config PYPROJECT]
+             [-w auto|N]
+             [--retries N]
+             [--timeout SECONDS]
+             [-t TAG ...]
+             [--json FILE]
+             [--junit FILE]
+             [--history FILE | --no-history]
+```
+
+| Argument | Default | Description |
+| --- | --- | --- |
+| `PATH ...` | configured `paths`, otherwise `tests` | Files or directories to discover. |
+| `-w`, `--workers` | `auto` | Worker process count or logical CPU count. |
+| `--retries` | `0` | Additional attempts after a gating outcome. |
+| `--timeout` | none | Global hard deadline for every selected test. |
+| `-t`, `--tag` | none | Required tag; repeat for AND selection. |
+| `--json` | none | Write the lossless JSON run result. |
+| `--junit` | none | Write a JUnit XML report. |
+| `--history` | `.testenix/history.sqlite3` | Override the duration-history database. |
+| `--no-history` | off | Disable reading and writing history. |
+
+CLI options override `[tool.testenix]` values for the current run.
+
+## Examples
+
+```console
+$ testenix run
+$ testenix run tests/unit tests/integration --workers 4
+$ testenix run --tag unit --tag fast
+$ testenix run --retries 1 --timeout 10
+$ testenix run --json reports/run.json --junit reports/junit.xml
+$ testenix --config config/pyproject.toml run
+```
+
+## Exit codes
+
+| Code | Meaning |
+| ---: | --- |
+| `0` | The run has no gating result. |
+| `1` | A test failed, errored, timed out, crashed, became flaky, or unexpectedly passed. |
+| `2` | Invalid CLI/configuration, collection error, or empty explicit tag selection. |
+| `3` | Internal runner, reporter, or history failure. |
+| `130` | User interruption. |
+
+---
+
+# Document: Configuration reference
+
+Canonical URL: https://polishdataengineer.github.io/testenix/reference/configuration/
+Source: docs/reference/configuration.md
+
+# Configuration reference
+
+Project defaults live in `[tool.testenix]` in `pyproject.toml`.
+
+```toml
+[tool.testenix]
+paths = ["tests"]
+workers = "auto"
+retries = 0
+# timeout = 10.0
+tags = []
+# json = "reports/testenix.json"
+# junit = "reports/junit.xml"
+history = ".testenix/history.sqlite3"
+```
+
+Unknown options are rejected instead of being silently ignored.
+
+## Options
+
+### `paths`
+
+- Type: string or list of strings
+- Default: `["tests"]`
+
+Files and directories used when no positional path is passed to `testenix run`.
+
+### `workers`
+
+- Type: positive integer or `"auto"`
+- Default: `"auto"`
+
+`auto` uses Python's logical CPU count. An explicit number is recommended for reproducible CI and
+benchmark runs.
+
+### `retries`
+
+- Type: non-negative integer
+- Default: `0`
+
+Number of user-requested attempts after a gating outcome. Earlier failures remain part of the
+result, so a later pass is finalized as `FLAKY`.
+
+### `timeout`
+
+- Type: positive finite number in seconds
+- Default: none
+
+Global hard timeout for selected tests. Timed tests run in isolated processes.
+
+### `tags`
+
+- Type: string or list of strings
+- Default: empty
+
+Every configured tag must be present on a test for it to be selected. A comma-separated string and
+a TOML list are both accepted.
+
+### `json`
+
+- Type: filesystem path or `null`
+- Default: none
+
+Location of the lossless JSON report. The programmatic field is `json_path`.
+
+### `junit`
+
+- Type: filesystem path or `null`
+- Default: none
+
+Location of the JUnit XML report. The programmatic field is `junit_path`.
+
+### `history`
+
+- Type: filesystem path, `false`, or `null`
+- Default: `.testenix/history.sqlite3`
+
+Duration-history database. Set it to `false` to disable history in TOML:
+
+```toml
+[tool.testenix]
+history = false
+```
+
+The programmatic field is `history_path` and accepts a `pathlib.Path` or `None`.
+
+## Programmatic configuration
+
+```python
+from pathlib import Path
+
+from testenix import TestenixConfig
+
+config = TestenixConfig(
+    paths=("tests/unit",),
+    workers=4,
+    retries=1,
+    timeout=5.0,
+    tags=("unit",),
+    json_path=Path("reports/run.json"),
+    history_path=None,
+)
+```
+
+`TestenixConfig` is immutable. Use `with_overrides` to derive a validated copy.
+
+---
+
+# Document: Python API reference
+
+Canonical URL: https://polishdataengineer.github.io/testenix/reference/api/
+Source: docs/reference/api.md
+
+# Python API reference
+
+The objects below are exported from `testenix` and form the public pre-1.0 API. Pre-1.0 releases
+may still make documented breaking changes.
+
+## Authoring
+
+```{eval-rst}
+.. autofunction:: testenix.test
+
+.. autofunction:: testenix.fixture
+
+.. autofunction:: testenix.case
+
+.. autofunction:: testenix.cases
+```
+
+### `skip`
+
+```python
+@skip(reason_or_function=None, /, *, reason=None, when=True)
+```
+
+Mark a test as skipped. It can be used as `@skip`, `@skip("reason")`, or with a conditional
+`when=...`.
+
+### `xfail`
+
+```python
+@xfail(reason_or_function=None, /, *, reason=None, when=True)
+```
+
+Mark a test as expected to fail. An unexpected pass becomes the gating `XPASS` status.
+
+```{eval-rst}
+.. autoclass:: testenix.CaseDefinition
+   :members:
+```
+
+## Discovery and execution
+
+```{eval-rst}
+.. autofunction:: testenix.discover
+
+.. autofunction:: testenix.run
+
+.. autofunction:: testenix.run_async
+
+.. autoclass:: testenix.TestenixConfig
+   :members:
+```
+
+## Result contracts
+
+```{eval-rst}
+.. autoclass:: testenix.RunResult
+   :members:
+
+.. autoclass:: testenix.TestResult
+   :members:
+
+.. autoclass:: testenix.TestSpec
+   :members:
+
+.. autoclass:: testenix.CollectionResult
+   :members:
+
+.. autoclass:: testenix.Status
+   :members:
+
+.. autoclass:: testenix.Scope
+   :members:
+```
+
+## Events
+
+```{eval-rst}
+.. autoclass:: testenix.Event
+   :members:
+
+.. autoclass:: testenix.EventSink
+   :members:
+```
+
+---
+
+# Document: Benchmark results
+
+Canonical URL: https://polishdataengineer.github.io/testenix/benchmarks/results/
+Source: docs/benchmarks/results.md
+
+# Published benchmark results
+
+These tables are generated from the raw JSON committed in `benchmarks/`. They are development
+evidence for specific synthetic workloads, not a universal claim that Testenix is always faster
+than pytest.
+
+![Preliminary Testenix throughput ratios](https://polishdataengineer.github.io/testenix/_static/benchmark-speedup.svg)
+
+## Median wall-clock time
+
+Lower time is better. A speedup of `{benchmarks[0].speedup_vs_pytest:.2f}×` means pytest's median
+wall time was {benchmarks[0].speedup_vs_pytest:.2f} times the Testenix median for that exact
+scenario.
+
+| Scenario | Testenix | pytest | pytest-xdist | vs pytest | vs xdist |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 10,000 no-op tests / 16 modules | 1.436 s | 3.525 s | 4.523 s | 2.46× | 3.15× |
+| 10,000 uneven-duration tests / 16 modules | 1.687 s | 3.990 s | 4.173 s | 2.36× | 2.47× |
+| 100,000 no-op tests / 16 modules | 11.957 s | 33.957 s | 44.322 s | 2.84× | 3.71× |
+
+<div class="benchmark-caveat">
+The 100,000-test result has only 3 measured rounds and
+0 warmups. It is published for transparency, but it does not yet satisfy the
+project's five-run, one-warmup minimum for a broad promotional claim.
+</div>
+
+## Environment
+
+- CPU: not recorded in this legacy baseline (14 logical CPUs)
+- Machine: `arm64`
+- Platform: `macOS-26.5.1-arm64-arm-64bit`
+- Python: `3.11.14`
+- Measurement: complete subprocess wall-clock time, including discovery, execution, aggregation,
+  and console rendering
+- Correctness gate: every command had to exit successfully and report the expected test count
+
+
+The raw JSON files retain the pre-release `ptf` runner identifier because the measurements were
+recorded before the project was named Testenix. The performance analysis documents that provenance;
+future approved baselines must use the `testenix` identifier and record their commit SHA.
+
+
+## Raw samples and variance
+
+### 10,000 no-op tests / 16 modules
+
+- Testenix range: 1.388 s–1.712 s
+- Testenix standard deviation: 0.131 s
+- Testenix raw samples: 1.430, 1.549, 1.712, 1.388, 1.436 seconds
+- pytest range: 3.447 s–3.829 s
+- pytest standard deviation: 0.151 s
+- pytest raw samples: 3.525, 3.829, 3.447, 3.487, 3.591 seconds
+- pytest-xdist range: 4.127 s–4.801 s
+- pytest-xdist standard deviation: 0.265 s
+- pytest-xdist raw samples: 4.127, 4.732, 4.459, 4.523, 4.801 seconds
+- Measured rounds: 5; warmups: 1
+- Workers: 4
+
+- [Raw JSON](https://github.com/polishdataengineer/testenix/blob/main/benchmarks/baseline.json)
+
+### 10,000 uneven-duration tests / 16 modules
+
+- Testenix range: 1.631 s–1.892 s
+- Testenix standard deviation: 0.106 s
+- Testenix raw samples: 1.892, 1.647, 1.687, 1.759, 1.631 seconds
+- pytest range: 3.927 s–4.605 s
+- pytest standard deviation: 0.282 s
+- pytest raw samples: 3.927, 4.016, 4.605, 3.977, 3.990 seconds
+- pytest-xdist range: 3.913 s–4.447 s
+- pytest-xdist standard deviation: 0.215 s
+- pytest-xdist raw samples: 3.913, 4.447, 4.243, 3.972, 4.173 seconds
+- Measured rounds: 5; warmups: 1
+- Workers: 4
+
+- [Raw JSON](https://github.com/polishdataengineer/testenix/blob/main/benchmarks/baseline_uneven.json)
+
+### 100,000 no-op tests / 16 modules
+
+- Testenix range: 10.532 s–16.703 s
+- Testenix standard deviation: 3.231 s
+- Testenix raw samples: 16.703, 11.957, 10.532 seconds
+- pytest range: 33.753 s–35.346 s
+- pytest standard deviation: 0.867 s
+- pytest raw samples: 35.346, 33.753, 33.957 seconds
+- pytest-xdist range: 43.554 s–45.751 s
+- pytest-xdist standard deviation: 1.115 s
+- pytest-xdist raw samples: 43.554, 45.751, 44.322 seconds
+- Measured rounds: 3; warmups: 0
+- Workers: 4
+
+- [Raw JSON](https://github.com/polishdataengineer/testenix/blob/main/benchmarks/baseline_100k.json)
+
+## Interpretation
+
+The checked-in results show that Testenix has low per-test overhead for large generated suites and
+that its built-in process model is competitive with both sequential pytest and pytest-xdist in
+those scenarios.
+
+They do **not** yet answer how Testenix performs for import-heavy applications, complex fixture
+graphs, assertion failures, real repositories, or different operating systems. Pytest also has a
+far larger plugin and tooling ecosystem. Read the
+[full performance analysis](https://polishdataengineer.github.io/testenix/performance-analysis/) for profiling details, memory notes,
+implemented optimizations, and the Rust/PyO3 decision.
+
+## Reproduce
+
+Run the same harness from a locked development environment:
+
+```console
+$ uv sync --locked --dev --no-editable
+$ uv run python benchmarks/run_benchmark.py --tests 10000 --workers 4 --repeats 5
+$ uv run python benchmarks/run_benchmark.py --tests 10000 --workers 4 --repeats 5 --uneven
+$ uv run python benchmarks/run_benchmark.py --tests 100000 --workers 4 --repeats 5
+```
+
+Review the [benchmarking contract](https://polishdataengineer.github.io/testenix/benchmarking/) before comparing or publishing new data.
+
+---
+
+# Document: Benchmarking contract
+
+Canonical URL: https://polishdataengineer.github.io/testenix/benchmarking/
+Source: docs/benchmarking.md
+
+# Benchmarking contract
+
+Testenix must be compared with both sequential pytest and pytest-xdist. Comparing only with sequential
+pytest would overstate the value of built-in parallelism.
+
+The benchmark suite will contain:
+
+- 100, 1,000, and 10,000 no-op tests to measure discovery and framework overhead;
+- tests with deliberately uneven durations to measure scheduler tail latency;
+- module- and session-scoped fixture suites to measure fixture reuse;
+- synchronous and asynchronous tests;
+- passing, failing, skipped, xfailed, flaky, timed-out, and crashing tests;
+- a worker-crash scenario that verifies every selected test reaches a terminal state;
+- cold and warm history runs.
+
+For every scenario record wall-clock duration, collection time, execution time, peak memory,
+worker utilization, number of process starts, result completeness, and output size. Performance
+claims require at least five runs per configuration and must publish the environment fingerprint.
+
+The current v0.1 harness automates wall-clock samples and the environment fingerprint across 16
+generated modules for a four-worker run. It also validates the completed test count, rotates runner
+order between measured rounds, supports an explicit module count, and records throughput, mean, and
+standard deviation. Pytest plugin autoloading and its cache provider are disabled, pytest-xdist is
+loaded explicitly, and every tool runs from the generated suite directory so repository-level
+pytest configuration does not affect the comparison. New output also records the commit, dirty
+state, lockfile hash, timestamp, and installed framework versions. The remaining telemetry above is
+the acceptance contract for the next harness iteration, not data claimed by the checked-in baseline
+files.
+
+Correctness wins over speed: a run with a missing, duplicated, or incorrectly finalized result is
+invalid and excluded from performance comparisons.
+
+Run the reproducible local harness with:
+
+```bash
+uv run python benchmarks/run_benchmark.py --tests 1000 --workers 4 --repeats 5
+uv run python benchmarks/run_benchmark.py --tests 1000 --workers 4 --repeats 5 --uneven
+uv run python benchmarks/run_benchmark.py --tests 10000 --modules 1000 --workers 4 --repeats 5
+```
+
+Maintainers can run the same comparison from GitHub's **Benchmarks** workflow and download its raw
+JSON artifact. Shared GitHub runners are appropriate for reproducibility checks, not for silently
+replacing the approved marketing baseline: their timing variance is outside this project's control.
+
+The checked-in baseline files are development evidence, not universal performance claims. See
+`docs/performance-analysis.md` for the current large-suite results, optimization profile, memory
+notes, and native-code decision. Real project suites and cross-platform repetitions remain required
+before publishing broad comparative claims.
+
+An approved public baseline must be committed through a reviewed pull request. Do not remove slow
+but valid samples as outliers; invalid commands remain evidence and must be explained. The
+100,000-test development file currently has only three measured rounds and no warmup, so it is
+published transparently but does not satisfy the five-run minimum above.
+
+---
+
+# Document: Performance analysis
+
+Canonical URL: https://polishdataengineer.github.io/testenix/performance-analysis/
+Source: docs/performance-analysis.md
+
+# Performance analysis
+
+## Executive summary
+
+The optimized v0.1 runner is faster than pytest and pytest-xdist in the checked-in synthetic
+large-suite scenarios. The largest recorded comparison is 100,000 passing tests across 16 modules:
+Testenix completed the suite in a median 11.957 seconds, pytest in 33.957 seconds, and pytest-xdist
+in 44.322 seconds. Every measured command had to report the expected test count or the harness
+rejected the sample. This 100,000-test result is preliminary because it has only three rounds, no
+warmup, and a wide Testenix range; it does not yet satisfy the project's five-run publication
+contract.
+
+This is evidence for the tested workload and machine, not a universal claim about every Python
+project. Import-heavy suites, fixture-heavy suites, slow tests, failure output, different operating
+systems, and real repositories still need independent measurements.
+
+## Environment and method
+
+- Apple M4 Pro, 14 logical CPUs, 24 GiB RAM;
+- macOS 26.5.1 arm64;
+- CPython 3.11.14;
+- four workers unless stated otherwise;
+- generated test modules accepted by both Testenix and pytest;
+- full process wall-clock time, including discovery, execution, aggregation, and console render;
+- deterministic rotated execution order instead of always running Testenix last;
+- test-count validation from each runner's final output;
+- `--no-history` for the primary runner-overhead comparison.
+
+The harness records every sample, median, mean, standard deviation, environment fingerprint, and
+median throughput. Five repetitions are used for 10,000-test claims and three counterbalanced
+repetitions for the more expensive 100,000-test comparison.
+
+The checked-in baseline JSON files retain the provisional `PTF` identifier used when the raw
+measurements were recorded. `PTF` and `Testenix` refer to the same pre-release v0.1 runtime; the
+project was renamed before its first public release. Future benchmark runs use `Testenix`.
+
+## Results
+
+| Scenario | pytest | pytest-xdist | Testenix | Testenix advantage |
+|---|---:|---:|---:|---:|
+| 1,000 no-op tests, 16 modules | 0.479 s | 0.922 s | 0.435 s | 1.10x vs pytest |
+| 10,000 no-op tests, 16 modules | 3.525 s | 4.523 s | 1.436 s | 2.45x vs pytest |
+| 10,000 uneven tests, 16 modules | 3.990 s | 4.173 s | 1.687 s | 2.36x vs pytest |
+| 10,000 no-op tests, 1,000 modules | 4.279 s | 5.175 s | 2.089 s | 2.05x vs pytest |
+| 100,000 no-op tests, 16 modules | 33.957 s | 44.322 s | 11.957 s | 2.84x vs pytest |
+
+The 100,000-test median throughputs were 8,363 tests/s for Testenix, 2,945 tests/s for pytest, and
+2,256 tests/s for pytest-xdist. Testenix showed higher positional variance (10.53–16.70 seconds) than the
+other runners, so the raw samples and standard deviation remain part of the checked-in baseline.
+
+For 100,000 tests, the coordinator's measured maximum resident set was approximately 513 MiB after
+the final manifest/event optimization. Sequential pytest measured approximately 520 MiB on the same
+generated suite. These macOS `time` figures are process maxima, not aggregate memory across every
+xdist/Testenix child process.
+
+### Worker-count sensitivity
+
+For 10,000 no-op tests across 16 modules, Testenix medians were:
+
+| Workers | Testenix median |
+|---:|---:|
+| 1 | 1.926 s |
+| 4 | 1.483 s |
+| 14 | 1.773 s |
+
+Four workers were best for this short-test workload. This does not imply a universal four-worker
+optimum: long CPU-bound tests can benefit from more processes. Adaptive worker selection should use
+measured history rather than a fixed cap tuned to one machine.
+
+### History and event-log cost
+
+The original implementation coupled SQLite duration history to an event sink that opened, locked,
+wrote, and closed its JSONL file for every event. A 10,000-test default-history run took 10.97
+seconds. Keeping the descriptor open, avoiding internal fanout serialization, and storing one
+self-contained attempt event instead of redundant post-hoc phase events reduced an equivalent run
+to 1.98–2.30 seconds. Replay files still contain every test specification, complete attempt phases,
+and final status.
+
+## Profile and implemented optimizations
+
+The first 10,000-test profile performed approximately 25.9 million Python calls. It spent large
+fractions of coordinator time serializing the same 80,000 events more than once, reducing those
+events again, resolving paths per test, and waiting for duplicated IPC payloads.
+
+The optimized profile performed approximately 3.46 million calls. The main changes were:
+
+1. Untimed synchronous tests reuse an executor thread instead of creating one OS thread per test.
+   Timed tests retain a daemon-thread plus hard process deadline, so a stuck Python thread cannot
+   block worker termination.
+2. A successful worker streams each completed result for crash recovery and sends only a final ACK;
+   it no longer sends the entire result tuple a second time.
+3. Contract paths are computed once per module, source lines use `co_firstlineno`, and worker
+   rediscovery builds an O(1) test-ID index instead of doing an O(m²) sequence of linear lookups.
+4. The one-sink event path avoids JSON fanout. Duplicate event serialization is lazy and only runs
+   when an event ID actually repeats.
+5. Event IDs use the already unique `run_id:sequence` form instead of calling the OS random source
+   tens of thousands of times.
+6. Coordinator attempts are persisted as one complete replay event rather than a redundant
+   started/three-phase/finished sequence emitted only after the attempt had already finished.
+7. Unchanged selected specifications reuse discovered objects; selection events are omitted when
+   every test is selected and no effective contract changed.
+8. JSONL keeps one append descriptor for the run rather than performing open/close per event.
+
+Correctness was retained throughout: the framework's full resilience suite passes after every
+optimization, including worker crashes, timeout process-tree cleanup, collection crashes/hangs,
+async task leaks, fixture teardown attribution, cancellation, retries, and event replay.
+
+## Rust decision
+
+Rust is not the next highest-value optimization. Python imports, Python test and fixture bodies,
+and CPython object interaction remain Python work. PyO3 can release the interpreter only while
+performing Rust-only work; it cannot make arbitrary Python callbacks execute in parallel under the
+GIL.
+
+Direction-finding microbenchmarks on this machine showed:
+
+| Candidate | Current signal | Rust/PyO3 result | Decision |
+|---|---:|---:|---|
+| LPT scheduling | ~2.1 ms for 1,000 synthetic units; real plan usually 16 units | bulk Rust loop ~17.5x faster | Absolute saving is below 2 ms; do not add native packaging for it |
+| Event build + reduce | ~32 ms per 1,000 tests in a light microbenchmark | likely reducible in bulk | Revisit only if it exceeds 10% of final wall time |
+| JSON event encoding | ~83 ms for ~8,000 detailed events | plausible 2–5x native gain | Relevant mainly to log-heavy mode; Python event compaction already recovered more |
+| Pipe transport | 36.7 ms for 1,000 individual messages vs 12.2 ms as one batch | native framing could help | Batch/checkpoint in Python first |
+| Sync invocation | 40–57 ms per 1,000 `to_thread` calls | Python body still crosses the GIL | Requires executor architecture, not Rust |
+| Python list/record conversion | FFI conversion dominated the operation | PyO3 was slower than Python built-ins | Avoid fine-grained FFI calls |
+
+If a later profile identifies a native-worthy data plane, the preferred design is an optional
+PyO3 `abi3` extension with one bulk call per batch/run and a pure-Python fallback. Candidate scope:
+framed IPC encoding/decoding or a bulk event reducer. Acceptance requires more than 10% end-to-end
+improvement on Linux, macOS, and Windows with identical terminal results. A Rust sidecar or embedded
+Python runtime is not justified: both retain Python interpreter startup/import costs while adding
+another protocol and a much larger release matrix.
+
+Relevant upstream constraints are documented in the
+[PyO3 parallelism guide](https://pyo3.rs/main/parallelism),
+[PyO3 performance guide](https://pyo3.rs/main/performance.html), and
+[Maturin mixed-project guide](https://www.maturin.rs/project_layout.html).
+
+## Next measurement gates
+
+- collection, execution, IPC-byte, process-start, CPU, and aggregate-memory telemetry;
+- 1,000/10,000/100,000 tests across 1, 16, 1,000, and 10,000 modules;
+- synchronous and asynchronous fixtures, failures, captured output, timeouts, and retries;
+- cold and warm SQLite history runs;
+- real project suites and Linux/macOS/Windows CI runners;
+- checkpoint-batched IPC followed by another profile;
+- persistent workers that collect and execute without importing every module twice.
+
+No universal “always faster than pytest” statement should be published until the real-project and
+cross-platform gates pass. The supported claim today is narrower: Testenix is materially faster in the
+measured large passing-suite scenarios while retaining supervised isolation and complete results.
+
+---
+
+# Document: Architecture
+
+Canonical URL: https://polishdataengineer.github.io/testenix/architecture/
+Source: docs/architecture.md
+
+# Testenix architecture
+
+Testenix is a native Python testing framework. Its core does not depend on pytest.
+Compatibility adapters may translate foreign test frameworks into the same manifest and event
+contracts, but they are not part of native execution.
+
+## Product contract
+
+Testenix aims to be typed, async-native, parallel-first, deterministic, and lossless when reporting
+test outcomes. A retry never overwrites an earlier attempt, infrastructure failures are distinct
+from test failures, and setup/call/teardown are preserved as separate phases.
+
+```text
+Authoring API -> supervised collection -> inert manifest -> affinity scheduler -> process workers
+                                                                  |          -> streamed attempts
+                                                                  +----------> append-only events
+                                                                              -> reducer
+                                                                              -> reports/history
+```
+
+## Dependency rules
+
+- `contracts` contains serializable domain values and imports no infrastructure.
+- `api`, `discovery`, `fixtures`, and `executor` form the native engine.
+- `events`, `aggregate`, and `scheduler` remain engine-independent.
+- `runner` is the application service connecting the native engine with execution policy.
+- reporters and storage consume completed domain results or versioned events.
+- optional compatibility adapters depend inward; the core never imports them.
+
+## Version 0.1 scope
+
+- explicit `@test` and `@fixture` authoring API, plus conventional `test_*` discovery;
+- sync functions, coroutines, generators, and async-generator fixture teardown;
+- explicit cases, tags, skip, expected failure, and per-test timeout metadata;
+- fixture scopes: test, module, session, with broader scopes currently bounded by a worker shard;
+- sequential and local process execution;
+- deterministic scheduling based on historical durations;
+- append-only JSONL events and a pure reducer;
+- console, JSON, and JUnit output plus local SQLite duration history;
+- retries represented as immutable attempts and finalized as `FLAKY` when appropriate.
+
+Remote workers, distributed storage, result caching, automatic quarantine, and a stable third-party
+plugin SDK are deliberately outside version 0.1.
+
+## Fixture scopes and process isolation
+
+The scheduler treats every normal test module as one affinity unit and never splits that unit
+between parallel shared workers. Multiple modules assigned to one shard execute in one persistent
+process and fixture runtime. A test with an explicit timeout (including a global timeout applied at
+selection) is instead a single-test isolation unit with a hard process deadline.
+
+Scope therefore has the following concrete meaning in version 0.1:
+
+| Scope | Lifetime |
+| --- | --- |
+| `test` | One instance for one concrete test attempt. |
+| `module` | One instance for all normal attempts from that module in a shared worker; a timed test has an isolated instance. |
+| `session` | One instance for all normal tests assigned to a shared worker process; one per isolated timed process. |
+
+Session fixtures are intentionally not run-global. Suites that require a true global singleton
+must keep that resource outside the fixture runtime until a coordinator-owned resource protocol is
+implemented. Setting one worker gives one shared session for normal tests, but timed tests remain
+isolated by design.
+
+## Worker protocol and recovery
+
+Workers receive only primitive rediscovery locators (path, function/case identity, and effective
+timeout), so arbitrary case values never cross the spawn boundary. A worker streams each completed
+`AttemptResult` before starting the next test and later republishes an owner if session teardown
+changes its result. The final batch envelope is still sent for normal completion.
+
+The supervisor drains the pipe while the child runs, avoiding pipe-buffer deadlocks for large
+results. If a later test crashes the process, already streamed attempts remain authoritative and
+only unfinished tests receive infrastructure/crash outcomes. A lost final ACK after all provisional
+results is a teardown failure, never a green run. A process crash gets one automatic recovery
+attempt without consuming the user's retry budget, but `CRASH -> PASS` remains `FLAKY`; only a
+framework-owned `INFRA_ERROR -> PASS` recovery becomes plain `PASS`.
+
+Collection itself uses the same spawn-based supervisor and returns only a JSON-safe manifest. A
+top-level import crash or deadline becomes a `CollectionIssue`, so user import code cannot exit or
+indefinitely block the coordinator. Timed execution units send a ready handshake after rediscovery;
+the test deadline therefore does not include interpreter startup or module import.
+
+Workers create a separate POSIX process session (or use recursive tree termination on Windows).
+Timeout and cancellation terminate descendants started by a test as well as the direct worker.
+
+---
+
+# Document: Roadmap
+
+Canonical URL: https://polishdataengineer.github.io/testenix/roadmap/
+Source: docs/roadmap.md
+
+# Roadmap
+
+## 0.1 — native vertical slice
+
+- Native function tests and explicit test descriptions.
+- Typed fixture graph with test, module, and session scopes.
+- Sync, coroutine, generator, and async-generator execution.
+- Explicit cases, tags, skip, expected failure, and timeouts.
+- Local process workers with deterministic LPT scheduling.
+- Immutable attempts and lossless setup/call/teardown aggregation.
+- Console, JSON, JUnit XML, JSONL events, and SQLite duration history.
+
+## 0.2 — fast feedback
+
+- Dynamic micro-shards and work stealing.
+- `--last-failed`, watch mode, and failure fingerprints.
+- Test-impact analysis in shadow mode with an explanation for every selection decision.
+- Stable assertion-diff protocol and improved plain-assert diagnostics.
+
+## 0.3 — adoption
+
+- Optional pytest collection/execution adapter in a separate extra or distribution.
+- A migration checker and automated transformations for common fixtures and markers.
+- Versioned reporter and selector plugin interfaces.
+- IDE protocol and machine-readable collection manifest.
+
+## Later
+
+- Remote workers with leases and heartbeats.
+- Resource-capacity scheduling and explicit test affinity.
+- Opt-in caching for tests that declare all external inputs.
+- Flakiness history, quarantine ownership, and expiration policy.
+
+Result caching and impact selection will not become build-gating defaults until their false-negative
+rate is measured continuously against full-suite runs.
+
+---
+
+# Document: Changelog
+
+Canonical URL: https://github.com/polishdataengineer/testenix/blob/main/CHANGELOG.md
+Source: CHANGELOG.md
+
+# Changelog
+
+All notable changes will be documented in this file. The format follows Keep a Changelog and the
+project intends to use Semantic Versioning once its public API reaches stability.
+
+## [Unreleased]
+
+## [0.1.0] - 2026-07-20
+
+### Added
+
+- Native authoring API, fixture graph, cases, and sync/async execution.
+- Versioned event stream and lossless run/test/attempt/phase result model.
+- Deterministic local scheduling, process-worker supervision, and retries.
+- Console, JSON, JUnit XML, and SQLite history adapters.
+- `testenix` command-line interface and `pyproject.toml` configuration.
+- Supervised collection, worker-ready handshakes, process-tree cleanup, and cancellable async runs.
+- Module affinity, streamed partial-result recovery, and stable rediscovery locators for arbitrary
+  case values.
+- Strict mypy/pyright validation and adversarial tests for crashes, hangs, retries, and teardown
+  ownership.
+- Counterbalanced, count-validating 1k/10k/100k performance harness with configurable module count
+  and scalable uneven workloads.
+- A searchable Sphinx/Furo documentation site for GitHub Pages, generated Python API reference,
+  and one-click page/full-document copying for LLM context.
+- Deterministic `llms.txt` and `llms-full.txt` references plus generated benchmark tables and SVG.
+- Manual GitHub benchmark workflow with downloadable raw JSON results.
+
+### Changed
+
+- Reused sync executor threads, removed duplicate final IPC payloads, indexed worker rediscovery,
+  and eliminated per-test path/source inspection.
+- Compacted coordinator events, made event IDs deterministic, retained one JSONL descriptor per
+  run, and removed unchanged manifest/selection copies.
+- Reduced the recorded 100k-test median to 11.957 seconds versus 33.957 seconds for pytest on the
+  documented M4 Pro development baseline; comparative claims remain workload-specific.
+- Isolated benchmark runs from repository pytest configuration, disabled pytest cache/plugin
+  autoloading, and added commit, lockfile, version, and dirty-state provenance to new results.
+- Hardened PyPI releases by requiring the release tag to reference a commit contained in `main`.
+
+---
+
+# Document: Security policy
+
+Canonical URL: https://github.com/polishdataengineer/testenix/blob/main/SECURITY.md
+Source: SECURITY.md
+
+# Security policy
+
+## Supported versions
+
+Testenix is currently pre-1.0. Security fixes are applied to the latest released version.
+
+## Reporting a vulnerability
+
+Please do not open a public issue for a suspected vulnerability. Use GitHub's private
+vulnerability reporting for this repository instead. Include the affected version, a minimal
+reproduction, impact, and any suggested mitigation. We will acknowledge a complete report within
+seven days and coordinate disclosure after a fix is available.
+
+---
+
+# Expanded public API snapshot
+
+This section is generated from `testenix.__all__` so an LLM receives concrete symbols, signatures, enum values, dataclass fields, and docstrings rather than unresolved documentation directives.
+
+## `testenix.CaseDefinition`
+
+```text
+CaseDefinition(parameters: 'Mapping[str, Any]', id: 'str | None' = None) -> None
+```
+
+Fields:
+
+- `parameters`: `Mapping[str, Any]`
+- `id`: `str | None`
+
+One concrete parameter mapping attached to a test function.
+
+## `testenix.CollectionResult`
+
+```text
+CollectionResult(items: 'tuple[CollectedTest, ...]', registry: 'FixtureRegistry', issues: 'tuple[CollectionIssue, ...]' = ()) -> None
+```
+
+Fields:
+
+- `items`: `tuple[CollectedTest, ...]`
+- `registry`: `FixtureRegistry`
+- `issues`: `tuple[CollectionIssue, ...]`
+
+Complete collection output, including non-fatal authoring issues.
+
+## `testenix.Event`
+
+```text
+Event(event_id: 'str', run_id: 'str', event_type: 'EventType', timestamp: 'float', sequence: 'int', schema_version: 'int' = 1, test_id: 'str | None' = None, attempt: 'int | None' = None, worker_id: 'str | None' = None, payload: 'dict[str, Any]' = <factory>) -> None
+```
+
+Fields:
+
+- `event_id`: `str`
+- `run_id`: `str`
+- `event_type`: `EventType`
+- `timestamp`: `float`
+- `sequence`: `int`
+- `schema_version`: `int`
+- `test_id`: `str | None`
+- `attempt`: `int | None`
+- `worker_id`: `str | None`
+- `payload`: `dict[str, Any]`
+
+Append-only fact emitted while a run is executing.
+
+## `testenix.EventSink`
+
+```text
+EventSink(*args, **kwargs)
+```
+
+Minimal sink contract used by runners, workers and adapters.
+
+## `testenix.TestenixConfig`
+
+```text
+TestenixConfig(paths: 'tuple[str, ...]' = ('tests',), workers: "int | Literal['auto']" = 'auto', retries: 'int' = 0, timeout: 'float | None' = None, tags: 'tuple[str, ...]' = (), json_path: 'Path | None' = None, junit_path: 'Path | None' = None, history_path: 'Path | None' = PosixPath('.testenix/history.sqlite3')) -> None
+```
+
+Fields:
+
+- `paths`: `tuple[str, ...]`
+- `workers`: `int | Literal['auto']`
+- `retries`: `int`
+- `timeout`: `float | None`
+- `tags`: `tuple[str, ...]`
+- `json_path`: `Path | None`
+- `junit_path`: `Path | None`
+- `history_path`: `Path | None`
+
+Validated execution and reporting settings.
+
+Paths are kept relative to the process working directory.  This mirrors
+normal command-line path handling and makes a config object safe to pass to
+a worker process without retaining hidden project state.
+
+## `testenix.RunResult`
+
+```text
+RunResult(run_id: 'str', tests: 'tuple[TestResult, ...]', collection_issues: 'tuple[CollectionIssue, ...]', started_at: 'float', finished_at: 'float') -> None
+```
+
+Fields:
+
+- `run_id`: `str`
+- `tests`: `tuple[TestResult, ...]`
+- `collection_issues`: `tuple[CollectionIssue, ...]`
+- `started_at`: `float`
+- `finished_at`: `float`
+
+RunResult(run_id: 'str', tests: 'tuple[TestResult, ...]', collection_issues: 'tuple[CollectionIssue, ...]', started_at: 'float', finished_at: 'float')
+
+## `testenix.Scope`
+
+```text
+Scope(value, names=None, *, module=None, qualname=None, type=None, start=1, boundary=None)
+```
+
+Values: TEST='test', MODULE='module', SESSION='session'
+
+Lifetime of a fixture instance.
+
+## `testenix.Status`
+
+```text
+Status(value, names=None, *, module=None, qualname=None, type=None, start=1, boundary=None)
+```
+
+Values: PASS='pass', FAIL='fail', ERROR_SETUP='error_setup', ERROR_TEARDOWN='error_teardown', SKIP='skip', XFAIL='xfail', XPASS='xpass', TIMEOUT='timeout', CRASH='crash', INFRA_ERROR='infra_error', CANCELLED='cancelled', NOT_RUN='not_run', FLAKY='flaky', CACHED_PASS='cached_pass'
+
+A lossless outcome vocabulary for phases, attempts, and tests.
+
+## `testenix.TestResult`
+
+```text
+TestResult(test: 'TestSpec', status: 'Status', attempts: 'tuple[AttemptResult, ...]', duration: 'float') -> None
+```
+
+Fields:
+
+- `test`: `TestSpec`
+- `status`: `Status`
+- `attempts`: `tuple[AttemptResult, ...]`
+- `duration`: `float`
+
+TestResult(test: 'TestSpec', status: 'Status', attempts: 'tuple[AttemptResult, ...]', duration: 'float')
+
+## `testenix.TestSpec`
+
+```text
+TestSpec(id: 'str', path: 'str', module_name: 'str', function_name: 'str', display_name: 'str', parameters: 'dict[str, Any]' = <factory>, case_id: 'str | None' = None, tags: 'frozenset[str]' = <factory>, skip_reason: 'str | None' = None, xfail_reason: 'str | None' = None, timeout: 'float | None' = None, source_line: 'int | None' = None) -> None
+```
+
+Fields:
+
+- `id`: `str`
+- `path`: `str`
+- `module_name`: `str`
+- `function_name`: `str`
+- `display_name`: `str`
+- `parameters`: `dict[str, Any]`
+- `case_id`: `str | None`
+- `tags`: `frozenset[str]`
+- `skip_reason`: `str | None`
+- `xfail_reason`: `str | None`
+- `timeout`: `float | None`
+- `source_line`: `int | None`
+
+Serializable description of one concrete test case.
+
+## `testenix.case`
+
+```text
+case(values: 'Mapping[str, Any] | str | None' = None, /, *, id: 'str | None' = None, **parameters: 'Any') -> 'CaseDefinition'
+```
+
+Attach one concrete parameter case.
+
+Examples::
+
+    @case(user="alice", expected=True)
+    @case("anonymous", user=None, expected=False)
+    @case({"id": 42}, id="record-42")
+
+## `testenix.cases`
+
+```text
+cases(*definitions: 'CaseDefinition | Mapping[str, Any]', ids: 'Sequence[str] | None' = None, **dimensions: 'Iterable[Any]') -> 'Callable[[F], F]'
+```
+
+Attach several cases, either explicitly or as a Cartesian product.
+
+``@cases({"x": 1}, {"x": 2})`` declares explicit mappings, while
+``@cases(role=["admin", "editor"], active=[True, False])`` creates the
+Cartesian product of the supplied dimensions.
+
+## `testenix.discover`
+
+```text
+discover(paths: 'str | Path | Iterable[str | Path]' = '.') -> 'CollectionResult'
+```
+
+Discover native tests and fixtures below one or more paths.
+
+Directories are searched recursively for ``test_*.py``.  An explicitly
+supplied Python file may have any name, which is useful for focused runs.
+Inside a module, ``test_*`` functions and functions decorated with
+``@test`` (or parameterized with ``@case(s)``) are collected.
+
+## `testenix.fixture`
+
+```text
+fixture(function: 'Callable[..., Any] | None' = None, /, *, scope: 'Scope | str' = <Scope.TEST: 'test'>, name: 'str | None' = None) -> 'Callable[..., Any]'
+```
+
+Declare a dependency provider with test, module or session lifetime.
+
+## `testenix.run`
+
+```text
+run(paths: 'Sequence[str] | str | None' = None, config: 'TestenixConfig | None' = None, *, event_sink: 'EventSink | None' = None) -> 'RunResult'
+```
+
+Discover and execute a native Testenix suite.
+
+The coordinator is the only component that decides final outcomes. Workers
+return immutable attempts, which are emitted to a versioned event stream and
+reduced after execution.
+
+## `testenix.run_async`
+
+```text
+run_async(paths: 'Sequence[str] | str | None' = None, config: 'TestenixConfig | None' = None, *, event_sink: 'EventSink | None' = None) -> 'RunResult'
+```
+
+Cancellable embedding facade around the process-oriented coordinator.
+
+## `testenix.skip`
+
+```text
+skip(reason_or_function: 'str | F | None' = None, /, *, reason: 'str | None' = None, when: 'bool' = True) -> 'F | Callable[[F], F]'
+```
+
+Mark a test as skipped, optionally only when a condition is true.
+
+## `testenix.test`
+
+```text
+test(function_or_description: 'Callable[..., Any] | str | None' = None, /, *, description: 'str | None' = None, tags: 'Iterable[str] | str' = (), timeout: 'float | None' = None) -> 'Callable[..., Any]'
+```
+
+Mark a function as a native Testenix test.
+
+Supported forms are ``@test``, ``@test()``, ``@test("description")`` and
+``@test(description="description", tags={...}, timeout=...)``.
+
+## `testenix.xfail`
+
+```text
+xfail(reason_or_function: 'str | F | None' = None, /, *, reason: 'str | None' = None, when: 'bool' = True) -> 'F | Callable[[F], F]'
+```
+
+Mark a test as expected to fail, optionally only when a condition is true.

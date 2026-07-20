@@ -1,0 +1,86 @@
+name: Benchmarks
+
+on:
+  workflow_dispatch:
+    inputs:
+      tests:
+        description: Number of generated tests
+        required: true
+        default: "10000"
+        type: choice
+        options:
+          - "1000"
+          - "10000"
+          - "100000"
+      modules:
+        description: Number of generated test modules
+        required: true
+        default: "16"
+        type: string
+      repeats:
+        description: Measured rounds
+        required: true
+        default: "5"
+        type: string
+      workers:
+        description: Worker processes for Testenix and pytest-xdist
+        required: true
+        default: "4"
+        type: string
+      uneven:
+        description: Include deliberately uneven test durations
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: benchmark-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    name: Compare runners
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      BENCHMARK_TESTS: ${{ inputs.tests }}
+      BENCHMARK_MODULES: ${{ inputs.modules }}
+      BENCHMARK_REPEATS: ${{ inputs.repeats }}
+      BENCHMARK_WORKERS: ${{ inputs.workers }}
+      BENCHMARK_UNEVEN: ${{ inputs.uneven }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.29"
+          python-version: "3.11"
+          enable-cache: false
+      - run: uv sync --locked --dev --no-editable
+      - name: Run comparison
+        shell: bash
+        run: |
+          extra=()
+          if [[ "$BENCHMARK_UNEVEN" == "true" ]]; then
+            extra+=(--uneven)
+          fi
+          uv run --no-editable python benchmarks/run_benchmark.py \
+            --tests "$BENCHMARK_TESTS" \
+            --modules "$BENCHMARK_MODULES" \
+            --repeats "$BENCHMARK_REPEATS" \
+            --workers "$BENCHMARK_WORKERS" \
+            --warmups 1 \
+            --output benchmark-result.json \
+            "${extra[@]}"
+      - name: Upload raw result
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: benchmark-${{ inputs.tests }}-tests-${{ github.run_id }}
+          path: benchmark-result.json
+          if-no-files-found: error
+          retention-days: 30

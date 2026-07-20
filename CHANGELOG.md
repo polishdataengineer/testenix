@@ -21,6 +21,10 @@ project intends to use Semantic Versioning once its public API reaches stability
   ownership.
 - Counterbalanced, count-validating 1k/10k/100k performance harness with configurable module count
   and scalable uneven workloads.
+- A searchable Sphinx/Furo documentation site for GitHub Pages, generated Python API reference,
+  and one-click page/full-document copying for LLM context.
+- Deterministic `llms.txt` and `llms-full.txt` references plus generated benchmark tables and SVG.
+- Manual GitHub benchmark workflow with downloadable raw JSON results.
 
 ### Changed
 
@@ -30,3 +34,6 @@ project intends to use Semantic Versioning once its public API reaches stability
   run, and removed unchanged manifest/selection copies.
 - Reduced the recorded 100k-test median to 11.957 seconds versus 33.957 seconds for pytest on the
   documented M4 Pro development baseline; comparative claims remain workload-specific.
+- Isolated benchmark runs from repository pytest configuration, disabled pytest cache/plugin
+  autoloading, and added commit, lockfile, version, and dirty-state provenance to new results.
+- Hardened PyPI releases by requiring the release tag to reference a commit contained in `main`.
