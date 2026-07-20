@@ -18,9 +18,9 @@ has pytest execution performance plus launcher and adapter overhead, which has n
 measured separately.
 
 The new safe-migration baseline is deliberately mixed rather than uniformly positive. For 3,000
-no-op pytest tests across 64 modules, the generated native suite was 2.62x faster than sequential
-pytest. Empty unittest wrappers were 5.17x slower than the sequential stdlib-based outcome probe,
-while the same layout with 1 ms of work in each method was 1.59x faster under four native workers. These are
+no-op pytest tests across 64 modules, the generated native suite was 2.96x faster than sequential
+pytest. Empty unittest wrappers were 7.40x slower than the sequential stdlib-based outcome probe,
+while the same layout with 1 ms of work in each method was 1.58x faster under four native workers. These are
 synthetic, sequential-source comparisons; they do not establish an advantage over pytest-xdist,
 parallel unittest runners, or a real repository.
 
@@ -71,9 +71,9 @@ warm-up and five measured rounds, and run native Testenix with four workers on t
 
 | Source runner | Test body | Source median | Native Testenix median | Native vs source | Migration transaction |
 |---|---|---:|---:|---:|---:|
-| sequential pytest | no-op | 2.680 s | 1.024 s | 2.62x faster | 8.656 s |
-| sequential unittest outcome probe | no-op | 0.241 s | 1.246 s | 5.17x slower | 6.717 s |
-| sequential unittest outcome probe | 1 ms sleep | 4.159 s | 2.619 s | 1.59x faster | 16.528 s |
+| sequential pytest | no-op | 1.539 s | 0.521 s | 2.96x faster | 5.940 s |
+| sequential unittest outcome probe | no-op | 0.161 s | 1.192 s | 7.40x slower | 6.742 s |
+| sequential unittest outcome probe | 1 ms sleep | 4.066 s | 2.577 s | 1.58x faster | 17.251 s |
 
 The transaction duration is reported separately from recurring execution. It includes generation,
 the source baseline, serial and parallel native candidates, parity checks, source rehashing, and

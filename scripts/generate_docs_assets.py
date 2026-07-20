@@ -325,9 +325,9 @@ The native side used four workers. The source pytest and unittest outcome-probe 
 sequential, so these rows do not compare Testenix with pytest-xdist or another parallel unittest
 runner. The unittest probe uses the standard-library loader and result semantics, then serializes
 per-test outcomes for parity checking; its timing therefore includes that small audit overhead.
-The no-op unittest wrappers are 5.17× slower than the probe because wrapper, loading, and
+The no-op unittest wrappers are 7.40× slower than the probe because wrapper, loading, and
 result-adaptation costs dominate an empty body. With 1 ms of synthetic work per unittest method,
-parallel native execution is 1.59× faster in this 64-module layout. Module count and duration are
+parallel native execution is 1.58× faster in this 64-module layout. Module count and duration are
 therefore material, and none of these synthetic rows predicts a specific real project.
 
 ### Raw migration samples and variance
