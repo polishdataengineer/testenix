@@ -2,8 +2,8 @@
 
 [![CI](https://github.com/polishdataengineer/testenix/actions/workflows/ci.yml/badge.svg)](https://github.com/polishdataengineer/testenix/actions/workflows/ci.yml)
 [![Documentation](https://github.com/polishdataengineer/testenix/actions/workflows/docs.yml/badge.svg)](https://polishdataengineer.github.io/testenix/)
-[![PyPI](https://img.shields.io/pypi/v/testenix.svg)](https://pypi.org/project/testenix/)
-[![Python](https://img.shields.io/pypi/pyversions/testenix.svg)](https://pypi.org/project/testenix/)
+[![PyPI](https://img.shields.io/pypi/v/testenix.svg?cacheSeconds=300)](https://pypi.org/project/testenix/)
+[![Python](https://img.shields.io/pypi/pyversions/testenix.svg?cacheSeconds=300)](https://pypi.org/project/testenix/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/polishdataengineer/testenix/blob/main/LICENSE)
 
 **Fast tests. Clear results.**
