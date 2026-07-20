@@ -1,67 +1,99 @@
 {
   "environment": {
     "cpu_count": 14,
+    "cpu_model": "Apple M4 Pro",
     "machine": "arm64",
     "platform": "macOS-26.5.1-arm64-arm-64bit",
     "python": "3.11.14"
   },
   "measurements": {
-    "ptf": {
-      "command": "python -m ptf run <suite> --workers 4 --no-history",
-      "maximum": 1.89167058293242,
-      "mean": 1.7233188833808526,
-      "median": 1.687250709044747,
-      "median_tests_per_second": 5926.801480297848,
-      "minimum": 1.6314293750328943,
-      "samples": [
-        1.89167058293242,
-        1.6474662499967963,
-        1.687250709044747,
-        1.7587774998974055,
-        1.6314293750328943
-      ],
-      "stdev": 0.10618124265004915
-    },
     "pytest": {
-      "command": "python -m pytest -q <suite>",
-      "maximum": 4.604614667012356,
-      "mean": 4.1029246331891045,
-      "median": 3.989588374970481,
-      "median_tests_per_second": 2506.524247648478,
-      "minimum": 3.9274788330076262,
+      "command": "python -m pytest -q -p no:cacheprovider <suite>",
+      "maximum": 3.084522874909453,
+      "mean": 3.070014416798949,
+      "median": 3.0755479170475155,
+      "median_tests_per_second": 3251.45316207587,
+      "minimum": 3.0426929589593783,
       "samples": [
-        3.9274788330076262,
-        4.015672332956456,
-        4.604614667012356,
-        3.9772689579986036,
-        3.989588374970481
+        3.0698430000338703,
+        3.084522874909453,
+        3.0426929589593783,
+        3.0755479170475155,
+        3.077465333044529
       ],
-      "stdev": 0.2822771416840913
+      "stdev": 0.016148704103043178
     },
     "pytest_xdist": {
-      "command": "python -m pytest -q -n 4 <suite>",
-      "maximum": 4.446900167036802,
-      "mean": 4.149471866805106,
-      "median": 4.172738166991621,
-      "median_tests_per_second": 2396.507904355188,
-      "minimum": 3.913430624990724,
+      "command": "python -m pytest -q -p xdist.plugin -p no:cacheprovider -n 4 <suite>",
+      "maximum": 2.175828624982387,
+      "mean": 2.139497366384603,
+      "median": 2.1381009169854224,
+      "median_tests_per_second": 4677.047711152626,
+      "minimum": 2.1085209579905495,
       "samples": [
-        3.913430624990724,
-        4.446900167036802,
-        4.242722625029273,
-        3.971567749977112,
-        4.172738166991621
+        2.145613415981643,
+        2.129422915983014,
+        2.1085209579905495,
+        2.1381009169854224,
+        2.175828624982387
       ],
-      "stdev": 0.21509646733157367
+      "stdev": 0.02459852085383506
+    },
+    "testenix": {
+      "command": "python -m testenix run <suite> --workers 4 --no-history",
+      "maximum": 1.377797209075652,
+      "mean": 1.3513461088296026,
+      "median": 1.3447179170325398,
+      "median_tests_per_second": 7436.503874409236,
+      "minimum": 1.3364459170261398,
+      "samples": [
+        1.3364459170261398,
+        1.377797209075652,
+        1.3416444170288742,
+        1.3447179170325398,
+        1.3561250839848071
+      ],
+      "stdev": 0.01645122164031878
     }
   },
+  "provenance": {
+    "commit": "18d9bba6cb5c8e39c2d5b211ee4384ae8f824524",
+    "dirty": false,
+    "lock_sha256": "2495c70ccb3362298a3948c0f0984524ed627abd8bd4ebae42685fad8040a99e",
+    "versions": {
+      "pytest": "9.1.1",
+      "pytest_xdist": "3.8.0",
+      "testenix": "0.1.0"
+    }
+  },
+  "recorded_at": "2026-07-20T12:13:53.369799+00:00",
   "scenario": {
     "measured_execution_orders": [
-      ["pytest", "pytest_xdist", "ptf"],
-      ["pytest_xdist", "ptf", "pytest"],
-      ["ptf", "pytest", "pytest_xdist"],
-      ["pytest", "pytest_xdist", "ptf"],
-      ["pytest_xdist", "ptf", "pytest"]
+      [
+        "pytest",
+        "pytest_xdist",
+        "testenix"
+      ],
+      [
+        "pytest_xdist",
+        "testenix",
+        "pytest"
+      ],
+      [
+        "testenix",
+        "pytest",
+        "pytest_xdist"
+      ],
+      [
+        "pytest",
+        "pytest_xdist",
+        "testenix"
+      ],
+      [
+        "pytest_xdist",
+        "testenix",
+        "pytest"
+      ]
     ],
     "repeats": 5,
     "test_count": 10000,
@@ -69,5 +101,6 @@
     "uneven": true,
     "warmups": 1,
     "workers": 4
-  }
+  },
+  "schema_version": 1
 }
