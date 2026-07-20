@@ -1,65 +1,106 @@
 {
   "environment": {
     "cpu_count": 14,
+    "cpu_model": "Apple M4 Pro",
     "machine": "arm64",
     "platform": "macOS-26.5.1-arm64-arm-64bit",
     "python": "3.11.14"
   },
   "measurements": {
-    "ptf": {
-      "command": "python -m ptf run <suite> --workers 4 --no-history",
-      "maximum": 16.70272699999623,
-      "mean": 13.063902888990318,
-      "median": 11.956735417013988,
-      "median_tests_per_second": 8363.486897744993,
-      "minimum": 10.532246249960735,
-      "samples": [
-        16.70272699999623,
-        11.956735417013988,
-        10.532246249960735
-      ],
-      "stdev": 3.2308006793814275
-    },
     "pytest": {
-      "command": "python -m pytest -q <suite>",
-      "maximum": 35.34597308305092,
-      "mean": 34.35190404132785,
-      "median": 33.95667954091914,
-      "median_tests_per_second": 2944.928695972645,
-      "minimum": 33.75305950001348,
+      "command": "python -m pytest -q -p no:cacheprovider <suite>",
+      "maximum": 27.004624833003618,
+      "mean": 25.630310266604646,
+      "median": 25.33250199991744,
+      "median_tests_per_second": 3947.497961327543,
+      "minimum": 25.187848125002347,
       "samples": [
-        35.34597308305092,
-        33.75305950001348,
-        33.95667954091914
+        27.004624833003618,
+        25.33250199991744,
+        25.246359458076768,
+        25.187848125002347,
+        25.380216917023063
       ],
-      "stdev": 0.8668882425369376
+      "stdev": 0.7718756287040471
     },
     "pytest_xdist": {
-      "command": "python -m pytest -q -n 4 <suite>",
-      "maximum": 45.750517500098795,
-      "mean": 44.542168597341515,
-      "median": 44.32166579202749,
-      "median_tests_per_second": 2256.2328877536875,
-      "minimum": 43.55432249989826,
+      "command": "python -m pytest -q -p xdist.plugin -p no:cacheprovider -n 4 <suite>",
+      "maximum": 22.215814750059508,
+      "mean": 21.564869691594502,
+      "median": 21.300136749981903,
+      "median_tests_per_second": 4694.805539221948,
+      "minimum": 21.12033112498466,
       "samples": [
-        43.55432249989826,
-        45.750517500098795,
-        44.32166579202749
+        21.239012082922272,
+        21.12033112498466,
+        22.215814750059508,
+        21.300136749981903,
+        21.949053750024177
       ],
-      "stdev": 1.1145780524889097
+      "stdev": 0.48610906919113417
+    },
+    "testenix": {
+      "command": "python -m testenix run <suite> --workers 4 --no-history",
+      "maximum": 8.095962249906734,
+      "mean": 8.026003074785695,
+      "median": 8.038316416088492,
+      "median_tests_per_second": 12440.415980621572,
+      "minimum": 7.912356999935582,
+      "samples": [
+        7.912356999935582,
+        8.095962249906734,
+        8.086165125016123,
+        8.038316416088492,
+        7.997214582981542
+      ],
+      "stdev": 0.07484915569794204
     }
   },
+  "provenance": {
+    "commit": "24b877c2f98420e91dcd2c8bcbc9417c7cf1ac96",
+    "dirty": false,
+    "lock_sha256": "2495c70ccb3362298a3948c0f0984524ed627abd8bd4ebae42685fad8040a99e",
+    "versions": {
+      "pytest": "9.1.1",
+      "pytest_xdist": "3.8.0",
+      "testenix": "0.1.0"
+    }
+  },
+  "recorded_at": "2026-07-20T12:19:39.942492+00:00",
   "scenario": {
     "measured_execution_orders": [
-      ["pytest", "pytest_xdist", "ptf"],
-      ["pytest_xdist", "ptf", "pytest"],
-      ["ptf", "pytest", "pytest_xdist"]
+      [
+        "pytest",
+        "pytest_xdist",
+        "testenix"
+      ],
+      [
+        "pytest_xdist",
+        "testenix",
+        "pytest"
+      ],
+      [
+        "testenix",
+        "pytest",
+        "pytest_xdist"
+      ],
+      [
+        "pytest",
+        "pytest_xdist",
+        "testenix"
+      ],
+      [
+        "pytest_xdist",
+        "testenix",
+        "pytest"
+      ]
     ],
-    "repeats": 3,
+    "repeats": 5,
     "test_count": 100000,
     "test_modules": 16,
     "uneven": false,
-    "warmups": 0,
+    "warmups": 1,
     "workers": 4
-  }
+  },
+  "schema_version": 1
 }

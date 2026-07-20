@@ -1,5 +1,5 @@
 [build-system]
-requires = ["uv_build>=0.11.26,<0.12"]
+requires = ["uv_build>=0.11.29,<0.12"]
 build-backend = "uv_build"
 
 [project]
@@ -29,10 +29,11 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://github.com/polishdataengineer/testenix"
-Documentation = "https://github.com/polishdataengineer/testenix/tree/main/docs"
+Documentation = "https://polishdataengineer.github.io/testenix/"
 Repository = "https://github.com/polishdataengineer/testenix"
 Issues = "https://github.com/polishdataengineer/testenix/issues"
 Changelog = "https://github.com/polishdataengineer/testenix/blob/main/CHANGELOG.md"
+Benchmarks = "https://polishdataengineer.github.io/testenix/benchmarks/results/"
 
 [project.scripts]
 testenix = "testenix.cli:main"
@@ -46,6 +47,11 @@ dev = [
   "ruff>=0.9",
   "twine>=6.2,<7",
   "check-wheel-contents>=0.6.3,<0.7",
+]
+docs = [
+  "furo>=2025.12.19,<2027",
+  "myst-parser>=5.1,<6",
+  "sphinx>=9,<10",
 ]
 
 [tool.uv.build-backend]

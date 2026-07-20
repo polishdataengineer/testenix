@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib.metadata
 import json
 import os
 import platform
@@ -13,8 +15,11 @@ import sys
 import tempfile
 import time
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,7 +84,8 @@ def _generate_suite(directory: Path, count: int, uneven: bool, module_count: int
 def _benchmark_environment() -> dict[str, str]:
     environment = os.environ.copy()
     environment["PYTHONHASHSEED"] = "0"
-    source_root = str(Path(__file__).resolve().parents[1] / "src")
+    environment["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+    source_root = str(ROOT / "src")
     existing_pythonpath = environment.get("PYTHONPATH")
     environment["PYTHONPATH"] = (
         f"{source_root}{os.pathsep}{existing_pythonpath}" if existing_pythonpath else source_root
@@ -116,6 +122,7 @@ def _run_once(
     *,
     environment: dict[str, str],
     test_count: int,
+    working_directory: Path,
 ) -> float:
     started = time.perf_counter()
     completed = subprocess.run(
@@ -123,6 +130,7 @@ def _run_once(
         capture_output=True,
         text=True,
         env=environment,
+        cwd=working_directory,
     )
     elapsed = time.perf_counter() - started
     _validate_completed_run(name, command, completed, test_count)
@@ -135,6 +143,7 @@ def _measure_commands(
     repeats: int,
     warmups: int,
     test_count: int,
+    working_directory: Path,
 ) -> tuple[dict[str, Measurement], tuple[tuple[str, ...], ...]]:
     """Measure in deterministic rotated rounds instead of framework-sized blocks."""
 
@@ -147,6 +156,7 @@ def _measure_commands(
                 commands[name],
                 environment=environment,
                 test_count=test_count,
+                working_directory=working_directory,
             )
 
     samples: dict[str, list[float]] = {name: [] for name in names}
@@ -162,6 +172,7 @@ def _measure_commands(
                     commands[name],
                     environment=environment,
                     test_count=test_count,
+                    working_directory=working_directory,
                 )
             )
 
@@ -187,6 +198,67 @@ def _measurement_dict(measurement: Measurement, *, test_count: int) -> dict[str,
     return data
 
 
+def _distribution_version(name: str) -> str:
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return "not-installed"
+
+
+def _git_value(*arguments: str) -> str | None:
+    completed = subprocess.run(
+        ["git", *arguments],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip() if completed.returncode == 0 else None
+
+
+def _cpu_model() -> str:
+    if sys.platform == "darwin":
+        completed = subprocess.run(
+            ["sysctl", "-n", "machdep.cpu.brand_string"],
+            capture_output=True,
+            text=True,
+        )
+        if completed.returncode == 0 and completed.stdout.strip():
+            return completed.stdout.strip()
+
+    if sys.platform.startswith("linux"):
+        try:
+            cpuinfo = Path("/proc/cpuinfo").read_text(encoding="utf-8")
+        except OSError:
+            cpuinfo = ""
+        for line in cpuinfo.splitlines():
+            key, separator, value = line.partition(":")
+            if separator and key.strip().lower() in {"hardware", "model name"}:
+                return value.strip()
+
+    return (
+        platform.processor().strip()
+        or os.environ.get("PROCESSOR_IDENTIFIER", "").strip()
+        or "unknown"
+    )
+
+
+def _provenance() -> dict[str, Any]:
+    status = _git_value("status", "--porcelain")
+    lock_path = ROOT / "uv.lock"
+    return {
+        "commit": _git_value("rev-parse", "HEAD"),
+        "dirty": bool(status) if status is not None else None,
+        "lock_sha256": (
+            hashlib.sha256(lock_path.read_bytes()).hexdigest() if lock_path.exists() else None
+        ),
+        "versions": {
+            "pytest": _distribution_version("pytest"),
+            "pytest_xdist": _distribution_version("pytest-xdist"),
+            "testenix": _distribution_version("testenix"),
+        },
+    }
+
+
 def run_benchmark(
     *,
     test_count: int,
@@ -204,12 +276,24 @@ def run_benchmark(
         )
         _generate_suite(suite, test_count, uneven, resolved_module_count)
         commands = {
-            "pytest": [sys.executable, "-m", "pytest", "-q", str(suite)],
+            "pytest": [
+                sys.executable,
+                "-m",
+                "pytest",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+                str(suite),
+            ],
             "pytest_xdist": [
                 sys.executable,
                 "-m",
                 "pytest",
                 "-q",
+                "-p",
+                "xdist.plugin",
+                "-p",
+                "no:cacheprovider",
                 "-n",
                 str(workers),
                 str(suite),
@@ -230,11 +314,16 @@ def run_benchmark(
             repeats=repeats,
             warmups=warmups,
             test_count=test_count,
+            working_directory=suite,
         )
 
     return {
+        "schema_version": 1,
+        "recorded_at": datetime.now(UTC).isoformat(),
+        "provenance": _provenance(),
         "environment": {
             "cpu_count": os.cpu_count(),
+            "cpu_model": _cpu_model(),
             "machine": platform.machine(),
             "platform": platform.platform(),
             "python": platform.python_version(),

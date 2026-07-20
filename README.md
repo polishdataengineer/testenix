@@ -1,6 +1,9 @@
 # Testenix
 
 [![CI](https://github.com/polishdataengineer/testenix/actions/workflows/ci.yml/badge.svg)](https://github.com/polishdataengineer/testenix/actions/workflows/ci.yml)
+[![Documentation](https://github.com/polishdataengineer/testenix/actions/workflows/docs.yml/badge.svg)](https://polishdataengineer.github.io/testenix/)
+[![PyPI](https://img.shields.io/pypi/v/testenix.svg)](https://pypi.org/project/testenix/)
+[![Python](https://img.shields.io/pypi/pyversions/testenix.svg)](https://pypi.org/project/testenix/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/polishdataengineer/testenix/blob/main/LICENSE)
 
 **Fast tests. Clear results.**
@@ -18,14 +21,14 @@ on pytest.
 
 ## Installation
 
-After the first PyPI release, install it with:
+Install the published package with:
 
 ```bash
 python -m pip install testenix
 ```
 
 Testenix requires Python 3.11 or newer. The project is currently an alpha; pin the version before
-using it in CI.
+using it in CI. Until the first PyPI release is visible, use the GitHub installation below.
 
 To try the current checkout before publication:
 
@@ -144,13 +147,37 @@ The trade-off is ecosystem maturity. pytest currently has much broader plugin, I
 rewriting, and migration support. Testenix should only claim to be better for the guarantees above
 until the adoption work in the roadmap is complete and measured on real projects.
 
+## Documentation and LLM reference
+
+The complete documentation is published at
+[polishdataengineer.github.io/testenix](https://polishdataengineer.github.io/testenix/). Every page
+can copy its own text or the complete project reference for an LLM.
+
+- [`llms.txt`](https://polishdataengineer.github.io/testenix/llms.txt) provides a compact index.
+- [`llms-full.txt`](https://polishdataengineer.github.io/testenix/llms-full.txt) contains the guides,
+  public API, architecture, roadmap, and benchmark context in one file.
+- [Documentation for LLMs](https://polishdataengineer.github.io/testenix/for-llms/) explains the
+  source-of-truth and copying workflow.
+
+## Benchmarks
+
+In the checked-in M4 Pro/CPython 3.11 synthetic baseline, Testenix completed 100,000 empty tests
+across 16 modules in a median 8.04 seconds, compared with 25.33 seconds for pytest and 21.30 seconds
+for pytest-xdist. That is 3.15x the throughput of pytest for this specific workload, not a universal
+performance promise. The result includes one warm-up and five measured, counterbalanced rounds.
+
+See the [generated results and chart](https://polishdataengineer.github.io/testenix/benchmarks/results/),
+[raw JSON](https://github.com/polishdataengineer/testenix/tree/main/benchmarks),
+[methodology](https://polishdataengineer.github.io/testenix/benchmarking/), and
+[performance analysis](https://polishdataengineer.github.io/testenix/performance-analysis/).
+
 ## Current limitations
 
 - Parallel workers are isolated processes. Normal tests from one module stay together, so a
   module-scoped fixture is not duplicated merely because `--workers` is greater than one.
 - Reproducible 1k/10k/100k comparisons, profiler findings, memory measurements, and the Rust/PyO3
   decision are documented in
-  [the performance analysis](https://github.com/polishdataengineer/testenix/blob/main/docs/performance-analysis.md).
+  [the performance analysis](https://polishdataengineer.github.io/testenix/performance-analysis/).
   Session-scoped fixtures remain per worker process, not run-global.
 - Every test with an explicit or global timeout is hard-isolated in its own process. This makes a
   blocking synchronous call killable on every supported platform, but module/session fixtures used
@@ -185,6 +212,6 @@ uv run --no-editable pytest
 uv run --no-editable ruff check .
 ```
 
-See [the architecture](https://github.com/polishdataengineer/testenix/blob/main/docs/architecture.md),
-[the roadmap](https://github.com/polishdataengineer/testenix/blob/main/docs/roadmap.md), and
-[the benchmarking contract](https://github.com/polishdataengineer/testenix/blob/main/docs/benchmarking.md).
+See [the architecture](https://polishdataengineer.github.io/testenix/architecture/),
+[the roadmap](https://polishdataengineer.github.io/testenix/roadmap/), and
+[the benchmarking contract](https://polishdataengineer.github.io/testenix/benchmarking/).

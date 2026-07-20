@@ -3,10 +3,11 @@
 ## Executive summary
 
 The optimized v0.1 runner is faster than pytest and pytest-xdist in the checked-in synthetic
-large-suite scenarios. The strongest validated comparison is 100,000 passing tests across 16
-modules: Testenix completed the suite in a median 11.957 seconds, pytest in 33.957 seconds, and
-pytest-xdist in 44.322 seconds. Every measured command had to report the expected test count or
-the harness rejected the sample.
+large-suite scenarios. The largest recorded comparison is 100,000 passing tests across 16 modules:
+Testenix completed the suite in a median 8.038 seconds, pytest in 25.333 seconds, and pytest-xdist
+in 21.300 seconds. Every measured command had to report the expected test count or the harness
+rejected the sample. The baseline contains one warm-up and five counterbalanced measured rounds,
+and Testenix's samples ranged from 7.912 to 8.096 seconds.
 
 This is evidence for the tested workload and machine, not a universal claim about every Python
 project. Import-heavy suites, fixture-heavy suites, slow tests, failure output, different operating
@@ -22,38 +23,36 @@ systems, and real repositories still need independent measurements.
 - full process wall-clock time, including discovery, execution, aggregation, and console render;
 - deterministic rotated execution order instead of always running Testenix last;
 - test-count validation from each runner's final output;
+- disabled pytest plugin autoloading and cache, with pytest-xdist loaded explicitly;
+- generated-suite working directory, isolated from repository-level pytest configuration;
 - `--no-history` for the primary runner-overhead comparison.
 
 The harness records every sample, median, mean, standard deviation, environment fingerprint, and
-median throughput. Five repetitions are used for 10,000-test claims and three counterbalanced
-repetitions for the more expensive 100,000-test comparison.
-
-The checked-in baseline JSON files retain the provisional `PTF` identifier used when the raw
-measurements were recorded. `PTF` and `Testenix` refer to the same pre-release v0.1 runtime; the
-project was renamed before its first public release. Future benchmark runs use `Testenix`.
+median throughput. All checked-in comparison files use one warm-up and five measured repetitions.
+They also record the clean source commit, lockfile hash, timestamp, CPU model, and installed
+Testenix, pytest, and pytest-xdist versions.
 
 ## Results
 
 | Scenario | pytest | pytest-xdist | Testenix | Testenix advantage |
 |---|---:|---:|---:|---:|
-| 1,000 no-op tests, 16 modules | 0.479 s | 0.922 s | 0.435 s | 1.10x vs pytest |
-| 10,000 no-op tests, 16 modules | 3.525 s | 4.523 s | 1.436 s | 2.45x vs pytest |
-| 10,000 uneven tests, 16 modules | 3.990 s | 4.173 s | 1.687 s | 2.36x vs pytest |
-| 10,000 no-op tests, 1,000 modules | 4.279 s | 5.175 s | 2.089 s | 2.05x vs pytest |
-| 100,000 no-op tests, 16 modules | 33.957 s | 44.322 s | 11.957 s | 2.84x vs pytest |
+| 10,000 no-op tests, 16 modules | 2.477 s | 2.106 s | 0.869 s | 2.85x vs pytest |
+| 10,000 uneven tests, 16 modules | 3.076 s | 2.138 s | 1.345 s | 2.29x vs pytest |
+| 100,000 no-op tests, 16 modules | 25.333 s | 21.300 s | 8.038 s | 3.15x vs pytest |
 
-The 100,000-test median throughputs were 8,363 tests/s for Testenix, 2,945 tests/s for pytest, and
-2,256 tests/s for pytest-xdist. Testenix showed higher positional variance (10.53–16.70 seconds) than the
-other runners, so the raw samples and standard deviation remain part of the checked-in baseline.
+The 100,000-test median throughputs were 12,440 tests/s for Testenix, 3,947 tests/s for pytest, and
+4,695 tests/s for pytest-xdist. The raw five-sample ranges and standard deviations are published in
+the generated benchmark page and the checked-in JSON files.
 
-For 100,000 tests, the coordinator's measured maximum resident set was approximately 513 MiB after
-the final manifest/event optimization. Sequential pytest measured approximately 520 MiB on the same
-generated suite. These macOS `time` figures are process maxima, not aggregate memory across every
-xdist/Testenix child process.
+In a separate exploratory 100,000-test profile, the coordinator's measured maximum resident set was
+approximately 513 MiB after the final manifest/event optimization. Sequential pytest measured
+approximately 520 MiB on the same generated suite. These older macOS `time` figures are not part of
+the current baseline JSON and are process maxima, not aggregate memory across every xdist/Testenix
+child process.
 
 ### Worker-count sensitivity
 
-For 10,000 no-op tests across 16 modules, Testenix medians were:
+An earlier exploratory run of 10,000 no-op tests across 16 modules produced these Testenix medians:
 
 | Workers | Testenix median |
 |---:|---:|
