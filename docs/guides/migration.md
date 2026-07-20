@@ -181,9 +181,9 @@ modules, four native workers, one warm-up, and five measured rounds:
 
 | Source runner | Test body | Source median | Native median | Native result | One-time migration |
 | --- | --- | ---: | ---: | ---: | ---: |
-| sequential pytest | no-op | 2.070 s | 0.636 s | 3.26x faster | 7.932 s |
-| sequential unittest outcome probe | no-op | 0.223 s | 1.388 s | 6.23x slower | 6.292 s |
-| sequential unittest outcome probe | 1 ms sleep | 4.106 s | 2.451 s | 1.68x faster | 19.686 s |
+| sequential pytest | no-op | 2.680 s | 1.024 s | 2.62x faster | 8.656 s |
+| sequential unittest outcome probe | no-op | 0.241 s | 1.246 s | 5.17x slower | 6.717 s |
+| sequential unittest outcome probe | 1 ms sleep | 4.159 s | 2.619 s | 1.59x faster | 16.528 s |
 
 The migration column is the complete copy, source-baseline, serial-candidate,
 parallel-candidate, integrity-check, and publication transaction. It is paid when regenerating a

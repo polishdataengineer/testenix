@@ -255,11 +255,11 @@ not a universal performance promise. The result includes one warm-up and five me
 counterbalanced rounds. It does not describe `testenix pytest`, which executes through pytest.
 
 The separate safe-migration benchmark used 3,000 tests across 64 modules and four native workers.
-After conversion, pytest no-op tests ran in 0.636 seconds versus 2.070 seconds through sequential
-pytest (3.26x faster). The result reverses for empty unittest methods: native wrappers took 1.388
-seconds versus 0.223 seconds through a sequential stdlib-based outcome probe (6.23x slower). Adding 1 ms of
-synthetic work per unittest method changed the medians to 2.451 versus 4.106 seconds (1.68x
-faster). Migration itself was a one-time 6.29–19.69-second validation-and-publication transaction
+After conversion, pytest no-op tests ran in 1.024 seconds versus 2.680 seconds through sequential
+pytest (2.62x faster). The result reverses for empty unittest methods: native wrappers took 1.246
+seconds versus 0.241 seconds through a sequential stdlib-based outcome probe (5.17x slower). Adding
+1 ms of synthetic work per unittest method changed the medians to 2.619 versus 4.159 seconds (1.59x
+faster). Migration itself was a one-time 6.72–16.53-second validation-and-publication transaction
 and is not included in those recurring-run medians. These synthetic comparisons depend on module
 layout, test duration, and worker count; they do not establish a universal advantage over pytest,
 pytest-xdist, unittest, or real project suites.

@@ -10,37 +10,37 @@
   "measurements": {
     "source_unittest": {
       "command": "python -m testenix._unittest_probe --output <project>/.benchmark-unittest.json tests",
-      "maximum_seconds": 4.121840709121898,
-      "mean_seconds": 4.091741125052795,
-      "median_seconds": 4.106408542022109,
-      "median_throughput_tests_per_second": 730.5654002274983,
-      "minimum_seconds": 4.056743917055428,
-      "range_seconds": 0.06509679206646979,
+      "maximum_seconds": 4.183977582957596,
+      "mean_seconds": 4.1594142246060075,
+      "median_seconds": 4.158616290893406,
+      "median_throughput_tests_per_second": 721.393797876818,
+      "minimum_seconds": 4.140240625012666,
+      "range_seconds": 0.0437369579449296,
       "samples_seconds": [
-        4.121840709121898,
-        4.112347041023895,
-        4.106408542022109,
-        4.061365416040644,
-        4.056743917055428
+        4.140240625012666,
+        4.167822333052754,
+        4.158616290893406,
+        4.183977582957596,
+        4.146414291113615
       ],
-      "stdev_seconds": 0.030385893603342425
+      "stdev_seconds": 0.017401988044063448
     },
     "testenix_native": {
       "command": "python -m testenix run testenix_migrated --workers 4 --no-history",
-      "maximum_seconds": 2.716512749902904,
-      "mean_seconds": 2.472377175046131,
-      "median_seconds": 2.4506939582061023,
-      "median_throughput_tests_per_second": 1224.143059542199,
-      "minimum_seconds": 2.3148754579015076,
-      "range_seconds": 0.4016372920013964,
+      "maximum_seconds": 3.022936916910112,
+      "mean_seconds": 2.7055346417240798,
+      "median_seconds": 2.6192796248942614,
+      "median_throughput_tests_per_second": 1145.3530854389433,
+      "minimum_seconds": 2.5467430418357253,
+      "range_seconds": 0.4761938750743866,
       "samples_seconds": [
-        2.716512749902904,
-        2.518095084000379,
-        2.4506939582061023,
-        2.3617086252197623,
-        2.3148754579015076
+        2.5467430418357253,
+        2.7270733749028295,
+        3.022936916910112,
+        2.611640250077471,
+        2.6192796248942614
       ],
-      "stdev_seconds": 0.15749348147344386
+      "stdev_seconds": 0.18886435491267092
     }
   },
   "migration": {
@@ -48,7 +48,7 @@
     "report": {
       "baseline": {
         "detail": null,
-        "duration": 4.6298422501422465,
+        "duration": 4.238013916881755,
         "errors": 0,
         "exit_code": 0,
         "failed": 0,
@@ -3064,9 +3064,9 @@
       },
       "converted_tests": 3000,
       "diagnostics": [],
-      "duration": 19.346646070480347,
+      "duration": 16.288975954055786,
       "exit_code": 0,
-      "finished_at": 1784560745.129122,
+      "finished_at": 1784563243.59778,
       "format": "testenix.migration-report",
       "framework": "unittest",
       "generated_files": [
@@ -21142,7 +21142,7 @@
       "mode": "publish",
       "native_parallel": {
         "detail": null,
-        "duration": 2.8635227088816464,
+        "duration": 2.5855314168147743,
         "errors": 0,
         "exit_code": 0,
         "failed": 0,
@@ -24158,7 +24158,7 @@
       },
       "native_serial": {
         "detail": null,
-        "duration": 8.407827208051458,
+        "duration": 6.894870416028425,
         "errors": 0,
         "exit_code": 0,
         "failed": 0,
@@ -27246,11 +27246,11 @@
       "sources": [
         "tests"
       ],
-      "started_at": 1784560725.782476,
+      "started_at": 1784563227.308804,
       "status": "published"
     },
-    "reported_seconds": 19.346646070480347,
-    "wall_seconds": 19.686042749788612
+    "reported_seconds": 16.288975954055786,
+    "wall_seconds": 16.52837137505412
   },
   "originals": {
     "after_measurements_sha256": "352e8cf2b230fe8f74e0642067d616dd2f00b982c188ad0ab5435fce97ea6b64",
@@ -27261,8 +27261,8 @@
   },
   "originals_modified": false,
   "provenance": {
-    "commit": "3cc507b3c0110c8089ad09230451477b89e19746",
-    "dirty": true,
+    "commit": "05443bef3b2888ce08990536e2d1f32bbb697456",
+    "dirty": false,
     "lock_sha256": "8ef0a9258aa5196bf2891f9da9f66c29bcf4e9bf297d178f3d4939cad36130cf",
     "versions": {
       "pytest": "9.1.1",
@@ -27271,7 +27271,7 @@
       "unittest": "stdlib-3.11.14"
     }
   },
-  "recorded_at": "2026-07-20T15:19:44.769825+00:00",
+  "recorded_at": "2026-07-20T16:01:24.880380+00:00",
   "scenario": {
     "delay_ms": 1.0,
     "framework": "unittest",
