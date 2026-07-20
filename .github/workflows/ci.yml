@@ -62,3 +62,21 @@ jobs:
       - run: uv run --isolated --no-project --with ./dist/testenix-*.whl testenix run examples/basic --no-history
       - run: uv run --isolated --no-project --with ./dist/testenix-*.tar.gz testenix --version
       - run: uv run --isolated --no-project --with ./dist/testenix-*.tar.gz testenix run examples/basic --no-history
+
+  required:
+    name: CI / required
+    if: ${{ always() }}
+    needs: [test, quality]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify required jobs
+        shell: bash
+        env:
+          TEST_RESULT: ${{ needs.test.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+        run: |
+          if [[ "$TEST_RESULT" != "success" || "$QUALITY_RESULT" != "success" ]]; then
+            echo "::error::Required CI jobs did not pass (test=$TEST_RESULT, quality=$QUALITY_RESULT)"
+            exit 1
+          fi
