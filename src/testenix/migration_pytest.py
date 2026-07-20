@@ -13,7 +13,9 @@ execution, and atomic publication of these artifacts.
 from __future__ import annotations
 
 import ast
+import copy
 import hashlib
+import re
 from collections import Counter
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
@@ -40,6 +42,7 @@ _BUILTIN_FIXTURES = frozenset(
         "capsys",
         "capsysbinary",
         "doctest_namespace",
+        "event_loop_policy",
         "monkeypatch",
         "pytestconfig",
         "record_property",
@@ -53,6 +56,10 @@ _BUILTIN_FIXTURES = frozenset(
         "tmpdir_factory",
     }
 )
+
+_SUPPORTED_BUILTIN_FIXTURES = frozenset({"monkeypatch", "tmp_path"})
+
+_SUPPORTED_MONKEYPATCH_METHODS = frozenset({"setattr", "setenv", "undo"})
 
 _ALLOWED_RUNTIME_HELPERS = frozenset(
     {
@@ -101,6 +108,10 @@ _NATIVE_ALIASES = {
     "test": "_testenix_test",
 }
 
+_MIGRATION_RUNTIME_ALIASES = {
+    "isolated_pytest_asyncio": "_testenix_isolated_asyncio",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class _Aliases:
@@ -143,6 +154,7 @@ class _Fixture:
     effective_name: str
     node: _Function
     dependencies: tuple[str, ...]
+    autouse: bool = False
 
 
 @dataclass(slots=True)
@@ -152,8 +164,11 @@ class _Module:
     aliases: _Aliases
     diagnostics: list[MigrationDiagnostic] = field(default_factory=list)
     fixtures: dict[str, _Fixture] = field(default_factory=dict)
+    test_classes: list[ast.ClassDef] = field(default_factory=list)
     test_mappings: list[TestMapping] = field(default_factory=list)
     imports: set[str] = field(default_factory=set)
+    migration_runtime_imports: set[str] = field(default_factory=set)
+    uses_bare_asyncio: bool = False
 
     @property
     def source_name(self) -> str:
@@ -331,6 +346,7 @@ def convert_pytest_suite(
         if module.tree is None or module.blocked or not module.fixtures:
             continue
         _insert_testenix_import(module.tree, module.imports)
+        _insert_migration_runtime_import(module.tree, module.migration_runtime_imports)
         _remove_unused_pytest_imports(module.tree)
         helper_path = module.source.migration_relative.with_name(
             f"{helper_names[module.source.project_relative]}.py"
@@ -358,6 +374,7 @@ def convert_pytest_suite(
         if module.tree is None or module.blocked:
             continue
         _insert_testenix_import(module.tree, module.imports)
+        _insert_migration_runtime_import(module.tree, module.migration_runtime_imports)
         _remove_unused_pytest_imports(module.tree)
         content = _render(module.tree, module.source_name)
         if content is None:
@@ -490,11 +507,117 @@ def _inspect_module(module: _Module, *, is_conftest: bool) -> None:
                     statement,
                 )
         elif isinstance(statement, ast.ClassDef) and _is_test_class(statement):
+            if _inspect_test_class(module, statement):
+                module.test_classes.append(statement)
+
+
+def _inspect_test_class(module: _Module, class_node: ast.ClassDef) -> bool:
+    """Accept only classes whose pytest lifecycle reduces to ``object()`` per test.
+
+    Generated wrappers instantiate the retained class once per native test item.  Anything
+    which can alter construction, inheritance, or pytest's class/method lifecycle is therefore
+    rejected before a wrapper is emitted.
+    """
+
+    safe = True
+    if class_node.bases or class_node.keywords:
+        module.error(
+            "PYT311_CLASS_INHERITANCE",
+            f"pytest class {class_node.name!r} uses inheritance or a metaclass",
+            class_node,
+        )
+        safe = False
+    if class_node.decorator_list:
+        module.error(
+            "PYT312_CLASS_DECORATOR",
+            f"pytest class {class_node.name!r} has a class decorator",
+            class_node.decorator_list[0],
+        )
+        safe = False
+
+    lifecycle_names = {
+        "__init__",
+        "__new__",
+        "setup_class",
+        "setup_method",
+        "teardown_class",
+        "teardown_method",
+    }
+    for member in class_node.body:
+        bindings = _class_scope_bound_names(member)
+        if "pytestmark" in bindings:
             module.error(
-                "PYT301_CLASS_TEST",
-                f"pytest class {statement.name!r} requires instance and lifecycle semantics",
-                statement,
+                "PYT313_CLASS_MARK",
+                f"pytest class {class_node.name!r} declares class-level pytestmark",
+                member,
             )
+            safe = False
+        lifecycle_bindings = sorted(bindings.intersection(lifecycle_names))
+        if lifecycle_bindings:
+            module.error(
+                "PYT314_CLASS_LIFECYCLE",
+                "pytest class lifecycle binding(s) are not supported: "
+                + ", ".join(lifecycle_bindings),
+                member,
+            )
+            safe = False
+        if not isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        fixture_decorator = next(
+            (
+                decorator
+                for decorator in member.decorator_list
+                if _decorator_canonical(decorator, module.aliases)
+                in {"pytest.fixture", "pytest_asyncio.fixture"}
+            ),
+            None,
+        )
+        if fixture_decorator is not None:
+            module.error(
+                "PYT315_CLASS_FIXTURE",
+                f"fixture method {member.name!r} is not supported inside pytest classes",
+                fixture_decorator,
+            )
+            safe = False
+        if not member.name.startswith("test"):
+            continue
+        positional = (*member.args.posonlyargs, *member.args.args)
+        if (
+            member.args.posonlyargs
+            or not positional
+            or positional[0].arg != "self"
+            or member.args.vararg is not None
+            or member.args.kwarg is not None
+            or bool(member.args.defaults)
+            or any(default is not None for default in member.args.kw_defaults)
+            or bool(getattr(member, "type_params", ()))
+        ):
+            module.error(
+                "PYT316_CLASS_SIGNATURE",
+                f"pytest method {class_node.name}.{member.name} needs a plain self signature "
+                "without defaults",
+                member,
+            )
+            safe = False
+        semantic_decorator = next(
+            (
+                decorator
+                for decorator in member.decorator_list
+                if _decorator_canonical(decorator, module.aliases)
+                in {"builtins.classmethod", "builtins.staticmethod", "classmethod", "staticmethod"}
+                or isinstance(decorator, ast.Name)
+                and decorator.id in {"classmethod", "staticmethod"}
+            ),
+            None,
+        )
+        if semantic_decorator is not None:
+            module.error(
+                "PYT316_CLASS_SIGNATURE",
+                f"pytest method {class_node.name}.{member.name} cannot be static or class-bound",
+                semantic_decorator,
+            )
+            safe = False
+    return safe
 
 
 def _convert_fixtures(module: _Module) -> None:
@@ -541,7 +664,7 @@ def _convert_fixtures(module: _Module) -> None:
             )
             continue
 
-        replacement, effective_name = _convert_fixture_decorator(
+        replacement, effective_name, autouse = _convert_fixture_decorator(
             module, fixture_decorator, statement.name
         )
         if replacement is None or effective_name is None:
@@ -549,7 +672,13 @@ def _convert_fixtures(module: _Module) -> None:
         statement.decorator_list = [replacement]
         module.imports.add("fixture")
         dependencies = _required_parameters(statement)
-        fixture = _Fixture(statement.name, effective_name, statement, dependencies)
+        fixture = _Fixture(
+            statement.name,
+            effective_name,
+            statement,
+            dependencies,
+            autouse=autouse,
+        )
         converted.append((statement, fixture))
 
     names = Counter(fixture.effective_name for _, fixture in converted)
@@ -580,34 +709,39 @@ def _convert_fixtures(module: _Module) -> None:
 
 def _convert_fixture_decorator(
     module: _Module, decorator: ast.expr, function_name: str
-) -> tuple[ast.expr | None, str | None]:
+) -> tuple[ast.expr | None, str | None, bool]:
     if not isinstance(decorator, ast.Call):
-        return _native_name("fixture"), function_name
+        return _native_name("fixture"), function_name, False
     if decorator.args:
         module.error(
             "PYT201_FIXTURE_ARGUMENTS",
             "pytest fixture decorator positional arguments are not supported",
             decorator,
         )
-        return None, None
+        return None, None, False
 
     keywords = _keyword_map(module, decorator, "fixture")
     if keywords is None:
-        return None, None
+        return None, None, False
     if "params" in keywords or "ids" in keywords:
         module.error(
             "PYT202_FIXTURE_PARAMS",
             f"parametrized fixture {function_name!r} has no native MVP equivalent",
             decorator,
         )
-        return None, None
-    if "autouse" in keywords and not _is_false(keywords["autouse"]):
-        module.error(
-            "PYT203_FIXTURE_AUTOUSE",
-            f"autouse fixture {function_name!r} cannot be made implicit by Testenix",
-            keywords["autouse"],
-        )
-        return None, None
+        return None, None, False
+
+    autouse = False
+    if "autouse" in keywords:
+        if _is_true(keywords["autouse"]):
+            autouse = True
+        elif not _is_false(keywords["autouse"]):
+            module.error(
+                "PYT203_FIXTURE_AUTOUSE",
+                f"autouse for fixture {function_name!r} must be the static boolean True or False",
+                keywords["autouse"],
+            )
+            return None, None, False
 
     allowed = {"autouse", "name", "scope"}
     unknown = sorted(set(keywords) - allowed)
@@ -617,10 +751,12 @@ def _convert_fixture_decorator(
             "unsupported fixture option(s): " + ", ".join(unknown),
             decorator,
         )
-        return None, None
+        return None, None, False
 
     effective_name = function_name
     output_keywords: list[ast.keyword] = []
+    if autouse:
+        output_keywords.append(ast.keyword(arg="autouse", value=ast.Constant(True)))
     if "name" in keywords:
         name = _literal_nonempty_string(keywords["name"])
         if name is None:
@@ -629,7 +765,7 @@ def _convert_fixture_decorator(
                 "fixture name must be a static non-empty string",
                 keywords["name"],
             )
-            return None, None
+            return None, None, False
         effective_name = name
         output_keywords.append(ast.keyword(arg="name", value=ast.Constant(name)))
 
@@ -648,11 +784,11 @@ def _convert_fixture_decorator(
                 detail,
                 keywords["scope"],
             )
-            return None, None
+            return None, None, False
         output_keywords.append(ast.keyword(arg="scope", value=ast.Constant(scopes[scope])))
 
     if not output_keywords:
-        return _native_name("fixture"), effective_name
+        return _native_name("fixture"), effective_name, False
     return (
         ast.Call(
             func=_native_name("fixture"),
@@ -660,103 +796,514 @@ def _convert_fixture_decorator(
             keywords=output_keywords,
         ),
         effective_name,
+        autouse,
     )
 
 
 def _convert_tests(module: _Module, visible_fixtures: set[str]) -> None:
     assert module.tree is not None
-    for statement in module.tree.body:
+    fixture_functions = {fixture.function_name for fixture in module.fixtures.values()}
+    for statement in tuple(module.tree.body):
         if not isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
-        if not statement.name.startswith("test") or statement.name in {
-            fixture.function_name for fixture in module.fixtures.values()
-        }:
+        if not statement.name.startswith("test") or statement.name in fixture_functions:
             continue
-
-        decorators: list[ast.expr] = []
-        tags: set[str] = set()
-        parameter_names: tuple[str, ...] = ()
-        parameter_cases: tuple[tuple[str, str], ...] = ()
-        parametrize_count = 0
-
-        for decorator in statement.decorator_list:
-            converted = _convert_test_decorator(module, statement, decorator)
-            if converted is None:
-                continue
-            if _decorator_canonical(decorator, module.aliases) == "pytest.mark.parametrize":
-                parametrize_count += 1
-            if converted.node is not None:
-                decorators.append(converted.node)
-            module.imports.update(converted.imports)
-            tags.update(converted.tags)
-            if converted.parameter_names:
-                parameter_names = converted.parameter_names
-                parameter_cases = converted.cases
-
-        if parametrize_count > 1:
-            module.error(
-                "PYT104_STACKED_PARAMETRIZE",
-                f"test {statement.name!r} has stacked parametrize decorators",
-                statement,
-            )
-
-        if tags:
-            decorators.insert(
-                0,
-                ast.Call(
-                    func=_native_name("test"),
-                    args=[],
-                    keywords=[
-                        ast.keyword(
-                            arg="tags",
-                            value=ast.Set(elts=[ast.Constant(tag) for tag in sorted(tags)]),
-                        )
-                    ],
-                ),
-            )
-            module.imports.add("test")
-        elif not statement.name.startswith("test_"):
-            decorators.insert(0, _native_name("test"))
-            module.imports.add("test")
+        asyncio_marker = _bare_asyncio_marker(statement, module.aliases)
+        module.uses_bare_asyncio |= asyncio_marker is not None
+        decorators, parameter_names, parameter_cases = _convert_test_decorators(module, statement)
         statement.decorator_list = decorators
+        _validate_test_parameters(
+            module,
+            statement,
+            parameter_names=parameter_names,
+            visible_fixtures=visible_fixtures,
+        )
+        _validate_supported_builtin_usage(
+            module,
+            statement,
+            parameter_names=parameter_names,
+            visible_fixtures=visible_fixtures,
+        )
+        _validate_asyncio_event_loop_policy(
+            module,
+            visible_fixtures=visible_fixtures,
+            marker=asyncio_marker,
+        )
+        _append_test_mappings(
+            module,
+            source_qualname=statement.name,
+            target_function=statement.name,
+            parameter_cases=parameter_cases,
+        )
 
-        required = set(_required_parameters(statement)) - set(parameter_names)
-        for parameter in sorted(required):
-            if parameter in visible_fixtures:
+    generated_wrappers: list[_Function] = []
+    bound_names = _top_level_bound_names(module.tree)
+    for class_node in module.test_classes:
+        for member in class_node.body:
+            if not isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-            if parameter in _BUILTIN_FIXTURES:
+            if not member.name.startswith("test"):
+                continue
+            asyncio_marker = _bare_asyncio_marker(member, module.aliases)
+            module.uses_bare_asyncio |= asyncio_marker is not None
+            decorators, parameter_names, parameter_cases = _convert_test_decorators(module, member)
+            # The retained class is an implementation detail. Native discovery sees only the
+            # generated module-level wrapper, so foreign runner decorators must not execute on
+            # the original method when the generated module is imported.
+            member.decorator_list = []
+            _validate_test_parameters(
+                module,
+                member,
+                parameter_names=parameter_names,
+                visible_fixtures=visible_fixtures,
+                ignored_parameters=frozenset({"self"}),
+            )
+            _validate_supported_builtin_usage(
+                module,
+                member,
+                parameter_names=parameter_names,
+                visible_fixtures=visible_fixtures,
+                ignored_parameters=frozenset({"self"}),
+            )
+            _validate_asyncio_event_loop_policy(
+                module,
+                visible_fixtures=visible_fixtures,
+                marker=asyncio_marker,
+            )
+            source_qualname = f"{class_node.name}.{member.name}"
+            wrapper_name = _class_wrapper_name(module, class_node.name, member.name)
+            if wrapper_name in bound_names:
                 module.error(
-                    "PYT209_BUILTIN_FIXTURE",
-                    f"pytest built-in fixture {parameter!r} has no native Testenix equivalent",
-                    statement,
+                    "PYT317_CLASS_WRAPPER_COLLISION",
+                    f"generated wrapper name {wrapper_name!r} already exists in the module",
+                    member,
                 )
-            else:
-                module.error(
-                    "PYT210_UNKNOWN_FIXTURE",
-                    f"required parameter {parameter!r} is not a statically known fixture or case",
-                    statement,
-                )
+                continue
+            bound_names.add(wrapper_name)
+            wrapper = _class_test_wrapper(
+                class_node,
+                member,
+                wrapper_name=wrapper_name,
+                decorators=decorators,
+            )
+            generated_wrappers.append(wrapper)
+            _append_test_mappings(
+                module,
+                source_qualname=source_qualname,
+                target_function=wrapper_name,
+                parameter_cases=parameter_cases,
+            )
+    module.tree.body.extend(generated_wrappers)
 
-        target_file = _target_relative_path(module.source).as_posix()
-        source_base = f"{module.source_name}::{statement.name}"
-        if parameter_cases:
-            module.test_mappings.extend(
-                TestMapping(
-                    source_id=f"{source_base}[{source_case}]",
-                    target_file=target_file,
-                    target_function=statement.name,
-                    case_id=target_case,
-                )
-                for source_case, target_case in parameter_cases
+
+def _bare_asyncio_marker(function: _Function, aliases: _Aliases) -> ast.expr | None:
+    return next(
+        (
+            decorator
+            for decorator in function.decorator_list
+            if not isinstance(decorator, ast.Call)
+            and _decorator_canonical(decorator, aliases) == "pytest.mark.asyncio"
+        ),
+        None,
+    )
+
+
+def _validate_asyncio_event_loop_policy(
+    module: _Module,
+    *,
+    visible_fixtures: set[str],
+    marker: ast.expr | None,
+) -> None:
+    if marker is None or "event_loop_policy" not in visible_fixtures:
+        return
+    module.error(
+        "PYT509_EVENT_LOOP_POLICY",
+        (
+            "a custom event_loop_policy fixture implicitly changes pytest-asyncio loop "
+            "creation and cannot be reproduced by native migration"
+        ),
+        marker,
+    )
+
+
+def _convert_test_decorators(
+    module: _Module,
+    function: _Function,
+) -> tuple[list[ast.expr], tuple[str, ...], tuple[tuple[str, str], ...]]:
+    decorators: list[ast.expr] = []
+    tags: set[str] = set()
+    parameter_names: tuple[str, ...] = ()
+    parameter_cases: tuple[tuple[str, str], ...] = ()
+    parametrize_count = 0
+    asyncio_count = 0
+    async_plugin_count = 0
+
+    for decorator in function.decorator_list:
+        canonical = _decorator_canonical(decorator, module.aliases)
+        converted = _convert_test_decorator(module, function, decorator)
+        if canonical == "pytest.mark.parametrize":
+            parametrize_count += 1
+        elif canonical == "pytest.mark.asyncio":
+            asyncio_count += 1
+            async_plugin_count += 1
+        elif canonical == "pytest.mark.anyio":
+            async_plugin_count += 1
+        if converted is None:
+            continue
+        if converted.node is not None:
+            decorators.append(converted.node)
+        module.imports.update(converted.imports)
+        tags.update(converted.tags)
+        if converted.parameter_names:
+            parameter_names = converted.parameter_names
+            parameter_cases = converted.cases
+
+    if parametrize_count > 1:
+        module.error(
+            "PYT104_STACKED_PARAMETRIZE",
+            f"test {function.name!r} has stacked parametrize decorators",
+            function,
+        )
+    if asyncio_count > 1:
+        module.error(
+            "PYT507_DUPLICATE_ASYNCIO_MARKER",
+            f"test {function.name!r} has more than one asyncio marker",
+            function,
+        )
+    if isinstance(function, ast.AsyncFunctionDef) and async_plugin_count == 0:
+        module.error(
+            "PYT508_UNMARKED_ASYNC_TEST",
+            (
+                f"unmarked async test {function.name!r} depends on pytest asyncio_mode; "
+                "add a bare @pytest.mark.asyncio before migrating"
+            ),
+            function,
+        )
+
+    if tags:
+        decorators.insert(
+            0,
+            ast.Call(
+                func=_native_name("test"),
+                args=[],
+                keywords=[
+                    ast.keyword(
+                        arg="tags",
+                        value=ast.Set(elts=[ast.Constant(tag) for tag in sorted(tags)]),
+                    )
+                ],
+            ),
+        )
+        module.imports.add("test")
+    elif not function.name.startswith("test_"):
+        decorators.insert(0, _native_name("test"))
+        module.imports.add("test")
+    return decorators, parameter_names, parameter_cases
+
+
+def _validate_test_parameters(
+    module: _Module,
+    function: _Function,
+    *,
+    parameter_names: tuple[str, ...],
+    visible_fixtures: set[str],
+    ignored_parameters: frozenset[str] = frozenset(),
+) -> None:
+    required = set(_required_parameters(function)) - set(parameter_names) - ignored_parameters
+    for parameter in sorted(required):
+        if parameter in visible_fixtures or parameter in _SUPPORTED_BUILTIN_FIXTURES:
+            continue
+        if parameter in _BUILTIN_FIXTURES:
+            module.error(
+                "PYT209_BUILTIN_FIXTURE",
+                f"pytest built-in fixture {parameter!r} has no native Testenix equivalent",
+                function,
             )
         else:
-            module.test_mappings.append(
-                TestMapping(
-                    source_id=source_base,
-                    target_file=target_file,
-                    target_function=statement.name,
-                )
+            module.error(
+                "PYT210_UNKNOWN_FIXTURE",
+                f"required parameter {parameter!r} is not a statically known fixture or case",
+                function,
             )
+
+
+def _validate_supported_builtin_usage(
+    module: _Module,
+    function: _Function,
+    *,
+    parameter_names: tuple[str, ...] = (),
+    visible_fixtures: set[str],
+    ignored_parameters: frozenset[str] = frozenset(),
+) -> None:
+    """Reject uses which escape the deliberately small native built-in contract.
+
+    A fixture declared by the project under the name ``monkeypatch`` is ordinary user code and
+    must not be constrained here.  The validation applies only when the parameter resolves to
+    Testenix's built-in compatibility fixture.
+    """
+
+    required = set(_required_parameters(function)) - set(parameter_names) - ignored_parameters
+    if "monkeypatch" not in required or "monkeypatch" in visible_fixtures:
+        return
+    _validate_builtin_monkeypatch_usage(module, function)
+
+
+def _validate_builtin_monkeypatch_usage(module: _Module, function: _Function) -> None:
+    _validate_monkeypatch_binding(
+        module,
+        function,
+        parameter="monkeypatch",
+        helpers=_static_module_helpers(module),
+        visiting=set(),
+        validated=set(),
+    )
+
+
+def _validate_monkeypatch_binding(
+    module: _Module,
+    function: _Function,
+    *,
+    parameter: str,
+    helpers: dict[str, _Function],
+    visiting: set[tuple[int, str]],
+    validated: set[tuple[int, str]],
+) -> None:
+    key = (id(function), parameter)
+    if key in validated or key in visiting:
+        return
+    visiting.add(key)
+
+    parents: dict[int, ast.AST] = {}
+    body_nodes: list[ast.AST] = []
+    for statement in function.body:
+        walked = tuple(ast.walk(statement))
+        body_nodes.extend(walked)
+        for ancestor in walked:
+            for child in ast.iter_child_nodes(ancestor):
+                parents[id(child)] = ancestor
+
+    for node in body_nodes:
+        if not isinstance(node, ast.Name) or node.id != parameter:
+            continue
+        parent = parents.get(id(node))
+        attribute = parent if isinstance(parent, ast.Attribute) and parent.value is node else None
+        call = None if attribute is None else parents.get(id(attribute))
+        if (
+            attribute is not None
+            and isinstance(call, ast.Call)
+            and call.func is attribute
+            and attribute.attr in _SUPPORTED_MONKEYPATCH_METHODS
+            and isinstance(node.ctx, ast.Load)
+        ):
+            continue
+
+        forwarded = _forwarded_monkeypatch_parameter(
+            function,
+            node,
+            parent=parent,
+            parents=parents,
+            helpers=helpers,
+        )
+        if forwarded is not None and isinstance(node.ctx, ast.Load):
+            helper, helper_parameter = forwarded
+            _validate_monkeypatch_binding(
+                module,
+                helper,
+                parameter=helper_parameter,
+                helpers=helpers,
+                visiting=visiting,
+                validated=validated,
+            )
+            continue
+
+        if attribute is not None and isinstance(call, ast.Call) and call.func is attribute:
+            detail = f"method {attribute.attr!r} is not supported"
+        else:
+            detail = "the fixture object is read, rebound, passed, or aliased"
+        allowed = ", ".join(f"{name}()" for name in sorted(_SUPPORTED_MONKEYPATCH_METHODS))
+        module.error(
+            "PYT214_MONKEYPATCH_USAGE",
+            f"built-in monkeypatch {detail}; only direct calls to {allowed} are migratable",
+            attribute or node,
+        )
+
+    visiting.remove(key)
+    validated.add(key)
+
+
+def _static_module_helpers(module: _Module) -> dict[str, _Function]:
+    if module.tree is None:
+        return {}
+    if any(
+        isinstance(statement, ast.ImportFrom)
+        and any(alias.name == "*" for alias in statement.names)
+        for statement in module.tree.body
+    ):
+        return {}
+
+    binding_counts: Counter[str] = Counter()
+    for statement in module.tree.body:
+        binding_counts.update(_class_scope_bound_names(statement))
+    return {
+        statement.name: statement
+        for statement in module.tree.body
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and not statement.decorator_list
+        and binding_counts[statement.name] == 1
+    }
+
+
+def _forwarded_monkeypatch_parameter(
+    caller: _Function,
+    argument: ast.Name,
+    *,
+    parent: ast.AST | None,
+    parents: dict[int, ast.AST],
+    helpers: dict[str, _Function],
+) -> tuple[_Function, str] | None:
+    call: ast.Call | None
+    if isinstance(parent, ast.Call) and any(item is argument for item in parent.args):
+        call = parent
+    elif isinstance(parent, ast.keyword) and parent.value is argument:
+        possible_call = parents.get(id(parent))
+        call = possible_call if isinstance(possible_call, ast.Call) else None
+    else:
+        return None
+    if call is None or not isinstance(call.func, ast.Name):
+        return None
+    if call.func.id in _function_local_bound_names(caller):
+        return None
+    helper = helpers.get(call.func.id)
+    if helper is None:
+        return None
+    target = _call_argument_parameter(call, argument, parent=parent, helper=helper)
+    return None if target is None else (helper, target)
+
+
+def _call_argument_parameter(
+    call: ast.Call,
+    argument: ast.Name,
+    *,
+    parent: ast.AST | None,
+    helper: _Function,
+) -> str | None:
+    positional_parameters = (*helper.args.posonlyargs, *helper.args.args)
+    if parent is call:
+        position = next(
+            (index for index, value in enumerate(call.args) if value is argument),
+            None,
+        )
+        if position is None or any(
+            isinstance(value, ast.Starred) for value in call.args[: position + 1]
+        ):
+            return None
+        if position >= len(positional_parameters):
+            return None
+        return positional_parameters[position].arg
+
+    if not isinstance(parent, ast.keyword) or parent.arg is None:
+        return None
+    keyword_parameters = {
+        argument_node.arg for argument_node in (*helper.args.args, *helper.args.kwonlyargs)
+    }
+    return parent.arg if parent.arg in keyword_parameters else None
+
+
+def _function_local_bound_names(function: _Function) -> set[str]:
+    names = set(_all_parameter_names(function))
+    if function.args.vararg is not None:
+        names.add(function.args.vararg.arg)
+    if function.args.kwarg is not None:
+        names.add(function.args.kwarg.arg)
+    for statement in function.body:
+        names.update(_class_scope_bound_names(statement))
+    return names
+
+
+def _append_test_mappings(
+    module: _Module,
+    *,
+    source_qualname: str,
+    target_function: str,
+    parameter_cases: tuple[tuple[str, str], ...],
+) -> None:
+    target_file = _target_relative_path(module.source).as_posix()
+    source_base = f"{module.source_name}::{source_qualname}"
+    if parameter_cases:
+        module.test_mappings.extend(
+            TestMapping(
+                source_id=f"{source_base}[{source_case}]",
+                target_file=target_file,
+                target_function=target_function,
+                case_id=target_case,
+            )
+            for source_case, target_case in parameter_cases
+        )
+    else:
+        module.test_mappings.append(
+            TestMapping(
+                source_id=source_base,
+                target_file=target_file,
+                target_function=target_function,
+            )
+        )
+
+
+def _class_wrapper_name(module: _Module, class_name: str, method_name: str) -> str:
+    source_id = f"{module.source_name}::{class_name}.{method_name}"
+    readable = re.sub(r"[^0-9A-Za-z_]", "_", f"test_{class_name}__{method_name}")[:100]
+    digest = hashlib.sha256(source_id.encode()).hexdigest()[:10]
+    return f"{readable}__{digest}"
+
+
+def _class_test_wrapper(
+    class_node: ast.ClassDef,
+    method: _Function,
+    *,
+    wrapper_name: str,
+    decorators: list[ast.expr],
+) -> _Function:
+    arguments = copy.deepcopy(method.args)
+    # _inspect_test_class guarantees a conventional first ``self`` argument.
+    arguments.args = arguments.args[1:]
+    arguments.defaults = []
+    arguments.kw_defaults = [None for _ in arguments.kwonlyargs]
+    for argument in (*arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs):
+        argument.annotation = None
+        argument.type_comment = None
+    forwarded = [
+        ast.keyword(arg=argument.arg, value=ast.Name(id=argument.arg, ctx=ast.Load()))
+        for argument in (*arguments.args, *arguments.kwonlyargs)
+    ]
+    method_call = ast.Call(
+        func=ast.Attribute(
+            value=ast.Call(
+                func=ast.Name(id=class_node.name, ctx=ast.Load()),
+                args=[],
+                keywords=[],
+            ),
+            attr=method.name,
+            ctx=ast.Load(),
+        ),
+        args=[],
+        keywords=forwarded,
+    )
+    is_async = isinstance(method, ast.AsyncFunctionDef)
+    value: ast.expr = ast.Await(method_call) if is_async else method_call
+    wrapper_type = ast.AsyncFunctionDef if is_async else ast.FunctionDef
+    wrapper = wrapper_type(
+        name=wrapper_name,
+        args=arguments,
+        body=[ast.Return(value=value)],
+        decorator_list=decorators,
+        returns=None,
+        type_comment=None,
+    )
+    if "type_params" in wrapper._fields:
+        # Python 3.12+ added this field. Generic pytest methods are rejected above, so the
+        # generated wrapper intentionally has no PEP 695 parameters of its own.
+        wrapper.type_params = []  # type: ignore[union-attr]
+    return ast.copy_location(wrapper, method)
 
 
 def _convert_test_decorator(
@@ -790,10 +1337,27 @@ def _convert_test_decorator(
             decorator,
         )
         return None
-    if canonical in {"pytest.mark.asyncio", "pytest.mark.anyio"}:
+    if canonical == "pytest.mark.asyncio":
+        if not isinstance(function, ast.AsyncFunctionDef):
+            module.error(
+                "PYT502_ASYNC_PLUGIN",
+                "bare pytest.mark.asyncio is supported only on async def tests",
+                decorator,
+            )
+            return None
+        if isinstance(decorator, ast.Call):
+            module.error(
+                "PYT502_ASYNC_PLUGIN",
+                "called or configured pytest.mark.asyncio may change event-loop semantics",
+                decorator,
+            )
+            return None
+        module.migration_runtime_imports.add("isolated_pytest_asyncio")
+        return _ConvertedDecorator(_migration_runtime_name("isolated_pytest_asyncio"))
+    if canonical == "pytest.mark.anyio":
         module.error(
             "PYT502_ASYNC_PLUGIN",
-            "pytest async plugin lifecycle semantics cannot be translated safely",
+            "pytest anyio backend and lifecycle semantics cannot be translated safely",
             decorator,
         )
         return None
@@ -1131,7 +1695,7 @@ def _parameter_ids(node: ast.expr | None, count: int) -> tuple[str | None, ...] 
 def _validate_fixture_dependencies(module: _Module, *, available: set[str]) -> None:
     for fixture in module.fixtures.values():
         for dependency in fixture.dependencies:
-            if dependency in available:
+            if dependency in available or dependency in _SUPPORTED_BUILTIN_FIXTURES:
                 continue
             if dependency in _BUILTIN_FIXTURES:
                 module.error(
@@ -1145,6 +1709,8 @@ def _validate_fixture_dependencies(module: _Module, *, available: set[str]) -> N
                     f"fixture {fixture.effective_name!r} depends on unknown fixture {dependency!r}",
                     fixture.node,
                 )
+        if "monkeypatch" in fixture.dependencies and "monkeypatch" not in available:
+            _validate_builtin_monkeypatch_usage(module, fixture.node)
 
 
 def _validate_runtime_pytest_calls(module: _Module) -> None:
@@ -1238,6 +1804,19 @@ def _diagnose_ancestor_fixture_use(
     for statement in module.tree.body:
         if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
             requested.update(_required_parameters(statement))
+        elif isinstance(statement, ast.ClassDef) and statement in module.test_classes:
+            for member in statement.body:
+                if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    requested.update(_required_parameters(member))
+    requested.update(
+        fixture.effective_name
+        for ancestor in ancestors
+        for fixture in ancestor.fixtures.values()
+        if fixture.autouse
+    )
+    if module.uses_bare_asyncio:
+        # pytest-asyncio requests this fixture implicitly for every marked test.
+        requested.add("event_loop_policy")
     inherited = {
         name
         for ancestor in ancestors
@@ -1269,7 +1848,8 @@ def _ancestor_conftests(
 
 def _conftest_helper_name(source: SourceFile) -> str:
     digest = hashlib.sha1(
-        source.project_relative.as_posix().encode(), usedforsecurity=False
+        f"{source.project_relative.as_posix()}\0{source.sha256.lower()}".encode(),
+        usedforsecurity=False,
     ).hexdigest()[:12]
     return f"_testenix_conftest_{digest}"
 
@@ -1358,6 +1938,22 @@ def _insert_testenix_import(tree: ast.Module, names: Iterable[str]) -> None:
         )
 
 
+def _insert_migration_runtime_import(tree: ast.Module, names: Iterable[str]) -> None:
+    materialized = tuple(sorted(set(names)))
+    if materialized:
+        _insert_statement(
+            tree,
+            ast.ImportFrom(
+                module="testenix.migration_runtime",
+                names=[
+                    ast.alias(name=name, asname=_MIGRATION_RUNTIME_ALIASES[name])
+                    for name in materialized
+                ],
+                level=0,
+            ),
+        )
+
+
 def _remove_unused_pytest_imports(tree: ast.Module) -> None:
     """Remove only foreign-runner imports made dead by decorator conversion.
 
@@ -1413,15 +2009,31 @@ def _native_name(name: str) -> ast.Name:
     return ast.Name(id=_NATIVE_ALIASES[name], ctx=ast.Load())
 
 
+def _migration_runtime_name(name: str) -> ast.Name:
+    return ast.Name(id=_MIGRATION_RUNTIME_ALIASES[name], ctx=ast.Load())
+
+
 def _diagnose_native_import_collisions(module: _Module) -> None:
     if module.tree is None:
         return
     required_aliases = {_NATIVE_ALIASES[name] for name in module.imports}
+    required_aliases.update(
+        _MIGRATION_RUNTIME_ALIASES[name] for name in module.migration_runtime_imports
+    )
     collisions = _top_level_bound_names(module.tree).intersection(required_aliases)
     if collisions:
+        collision_node = next(
+            (
+                statement
+                for statement in module.tree.body
+                if _top_level_statement_bound_names(statement).intersection(collisions)
+            ),
+            None,
+        )
         module.error(
             "PYT008_GENERATED_IMPORT_COLLISION",
             "source binds reserved generated import name(s): " + ", ".join(sorted(collisions)),
+            collision_node,
         )
 
 
@@ -1466,19 +2078,22 @@ def _render(tree: ast.Module, source_name: str) -> str | None:
 
 
 def _top_level_bound_names(tree: ast.Module) -> set[str]:
-    names: set[str] = set()
-    for statement in tree.body:
-        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            names.add(statement.name)
-        elif isinstance(statement, (ast.Import, ast.ImportFrom)):
-            for alias in statement.names:
-                if alias.name != "*":
-                    names.add(alias.asname or alias.name.split(".")[0])
-        elif isinstance(statement, (ast.Assign, ast.AnnAssign)):
-            targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
-            for target in targets:
-                names.update(_target_names(target))
-    return names
+    return {name for statement in tree.body for name in _top_level_statement_bound_names(statement)}
+
+
+def _top_level_statement_bound_names(statement: ast.stmt) -> set[str]:
+    if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return {statement.name}
+    if isinstance(statement, (ast.Import, ast.ImportFrom)):
+        return {
+            alias.asname or alias.name.split(".")[0]
+            for alias in statement.names
+            if alias.name != "*"
+        }
+    if isinstance(statement, (ast.Assign, ast.AnnAssign)):
+        targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+        return {name for target in targets for name in _target_names(target)}
+    return set()
 
 
 def _target_names(target: ast.expr) -> set[str]:
@@ -1487,6 +2102,73 @@ def _target_names(target: ast.expr) -> set[str]:
     if isinstance(target, (ast.List, ast.Tuple)):
         return {name for element in target.elts for name in _target_names(element)}
     return set()
+
+
+class _ClassScopeBindingCollector(ast.NodeVisitor):
+    """Collect names bound in a class namespace without entering nested scopes."""
+
+    def __init__(self) -> None:
+        self.names: set[str] = set()
+
+    def visit_Name(self, node: ast.Name) -> None:  # noqa: N802 - ast visitor protocol
+        if isinstance(node.ctx, (ast.Store, ast.Del)):
+            self.names.add(node.id)
+
+    def visit_FunctionDef(  # noqa: N802 - ast visitor protocol
+        self, node: ast.FunctionDef
+    ) -> None:
+        self.names.add(node.name)
+
+    def visit_AsyncFunctionDef(  # noqa: N802 - ast visitor protocol
+        self, node: ast.AsyncFunctionDef
+    ) -> None:
+        self.names.add(node.name)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:  # noqa: N802 - ast visitor protocol
+        self.names.add(node.name)
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:  # noqa: N802 - ast visitor protocol
+        return
+
+    def visit_Import(self, node: ast.Import) -> None:  # noqa: N802 - ast visitor protocol
+        self.names.update(alias.asname or alias.name.split(".")[0] for alias in node.names)
+
+    def visit_ImportFrom(  # noqa: N802 - ast visitor protocol
+        self, node: ast.ImportFrom
+    ) -> None:
+        self.names.update(alias.asname or alias.name for alias in node.names if alias.name != "*")
+
+    def visit_ExceptHandler(  # noqa: N802 - ast visitor protocol
+        self, node: ast.ExceptHandler
+    ) -> None:
+        if node.name is not None:
+            self.names.add(node.name)
+        for statement in node.body:
+            self.visit(statement)
+
+    def visit_MatchAs(self, node: ast.MatchAs) -> None:  # noqa: N802 - ast visitor protocol
+        if node.name is not None:
+            self.names.add(node.name)
+        if node.pattern is not None:
+            self.visit(node.pattern)
+
+    def visit_MatchStar(self, node: ast.MatchStar) -> None:  # noqa: N802 - ast visitor protocol
+        if node.name is not None:
+            self.names.add(node.name)
+
+    def visit_MatchMapping(  # noqa: N802 - ast visitor protocol
+        self, node: ast.MatchMapping
+    ) -> None:
+        if node.rest is not None:
+            self.names.add(node.rest)
+        for pattern in node.patterns:
+            self.visit(pattern)
+
+
+def _class_scope_bound_names(statement: ast.stmt) -> set[str]:
+    collector = _ClassScopeBindingCollector()
+    collector.visit(statement)
+    return collector.names
 
 
 def _assigned_name(statement: ast.stmt) -> str | None:
@@ -1528,6 +2210,10 @@ def _literal_nonempty_string(node: ast.expr | None) -> str | None:
 
 def _is_false(node: ast.expr) -> bool:
     return isinstance(node, ast.Constant) and node.value is False
+
+
+def _is_true(node: ast.expr) -> bool:
+    return isinstance(node, ast.Constant) and node.value is True
 
 
 def _deduplicate_diagnostics(

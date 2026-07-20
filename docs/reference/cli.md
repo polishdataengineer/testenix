@@ -99,6 +99,17 @@ rename leaves the output absent. A report-only failure after publication warns b
 validated output and successful exit status intact. See [safe migration](../guides/migration.md) for supported constructs, unittest's
 SHA-pinned wrapper model, rollback guarantees, and external-side-effect boundaries.
 
+Human-readable output distinguishes an analyzed candidate, a validated candidate, a generated
+candidate, a statically convertible subset, and a published conversion. Repeated diagnostics are
+grouped by severity and code, with the first source location shown. Use `--report-json FILE` or
+`--report-json -` when every individual line-addressed diagnostic is required. The JSON field
+`converted_tests` counts source-to-target mappings built in memory; only `status: published` and
+`published: true` mean that an output directory was created.
+
+`MIG006` warns that a candidate has only one schedulable module affinity unit despite a parallel
+worker setting. It is emitted only for `--check` or publication after static analysis succeeds,
+because dry-run and unsupported transactions never execute the parallel gate.
+
 ## Examples
 
 ```console

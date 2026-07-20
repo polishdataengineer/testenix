@@ -62,6 +62,41 @@ def test_empty_repository(repository: Repository) -> None:
 The dependency graph is validated before execution. Missing fixtures and cycles become collection
 issues instead of hanging the run.
 
+## Built-in fixtures
+
+Testenix 0.2 provides two dependency-free, test-scoped built-ins by name:
+
+```python
+from pathlib import Path
+
+
+def test_isolated_file(tmp_path: Path, monkeypatch) -> None:
+    target = tmp_path / "value.txt"
+    target.write_text("ok", encoding="utf-8")
+    monkeypatch.setenv("TESTENIX_EXAMPLE", "enabled")
+    assert target.read_text(encoding="utf-8") == "ok"
+```
+
+`tmp_path` is a fresh `pathlib.Path` removed during teardown. `monkeypatch` supports reversible
+object/attribute and dotted-import `setattr`, `setenv`, and idempotent `undo`. Changes are restored
+in LIFO order even when the test fails. Other pytest monkeypatch operations and pytest built-ins
+such as `capsys`, `caplog`, and `request` are not native Testenix fixtures.
+
+## Autouse fixtures
+
+Use `autouse=True` when setup and cleanup must apply to every test that can see a fixture:
+
+```python
+@fixture(autouse=True)
+def isolated_environment(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "test")
+    yield
+```
+
+Explicitly requesting the same fixture still resolves one cached value for the test. A local
+fixture definition overrides a visible imported definition with the same name before Testenix
+chooses which fixtures run automatically.
+
 ## Scopes
 
 ```python
@@ -75,7 +110,7 @@ def worker_resource() -> Resource:
     return Resource()
 ```
 
-| Scope | Lifetime in Testenix 0.1 |
+| Scope | Lifetime in Testenix 0.2 |
 | --- | --- |
 | `test` | One instance for one concrete test attempt. |
 | `module` | Shared by normal tests from the module inside one worker. |

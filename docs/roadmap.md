@@ -14,17 +14,29 @@
   with source fingerprints, disposable validation copies, serial/parallel parity, and atomic
   create-only publication.
 
-## 0.2 — fast feedback
+## 0.2 — real-world pytest migration
+
+- Dependency-free native `tmp_path` and reversible `monkeypatch` fixtures for common
+  `setattr`/`setenv` usage.
+- Static autouse fixtures with native setup and teardown ownership.
+- Bare pytest-asyncio coroutine markers translated to isolated fresh-loop wrappers that preserve
+  the plugin's default function-scoped loop lifecycle.
+- Fresh-instance wrappers for simple pytest classes, while complex lifecycle and inheritance stay
+  fail-closed.
+- Compact migration diagnostics on the console with complete line detail retained in JSON.
+- Differential validation against a 118-test real-world suite before publication.
+
+## 0.3 — fast feedback
 
 - Dynamic micro-shards and work stealing.
 - `--last-failed`, watch mode, and failure fingerprints.
 - Test-impact analysis in shadow mode with an explanation for every selection decision.
 - Stable assertion-diff protocol and improved plain-assert diagnostics.
 
-## 0.3 — adoption
+## 0.4 — adoption
 
 - Pytest hook adapter translating collection and outcomes into Testenix events and `RunResult`.
-- Expand migration beyond the v0.1 static subset only when new transformations have differential
+- Expand migration beyond the v0.2 static subset only when new transformations have differential
   semantics tests on real projects.
 - Versioned reporter and selector plugin interfaces.
 - IDE protocol and machine-readable collection manifest.

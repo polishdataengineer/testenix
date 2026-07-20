@@ -1,24 +1,26 @@
-"""Runtime helpers used by generated unittest migration wrappers.
+"""Runtime helpers used by generated migration wrappers.
 
-The migration layer intentionally executes the original ``unittest.TestCase``
-instead of approximating its assertion and per-test lifecycle semantics.  A
-generated wrapper remains a native Testenix function, while this module turns
-the standard-library result callbacks back into exceptions understood by the
-native executor.
+Pytest coroutine wrappers preserve the default function-scoped event-loop
+lifecycle of ``pytest-asyncio``.  Unittest wrappers intentionally execute the
+original ``unittest.TestCase`` instead of approximating its assertion and
+per-test lifecycle semantics.
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import hashlib
 import json
 import re
 import threading
 import unittest
-from collections.abc import Mapping
+from collections.abc import Callable, Coroutine, Mapping
 from dataclasses import dataclass
+from functools import wraps
 from pathlib import Path
 from types import MappingProxyType, ModuleType, TracebackType
-from typing import TypeAlias
+from typing import Any, ParamSpec, TypeAlias, TypeVar
 
 from testenix.discovery import load_module
 
@@ -28,6 +30,38 @@ _MODULE_CACHE_LOCK = threading.RLock()
 
 ExceptionInfo: TypeAlias = tuple[type[BaseException], BaseException, TracebackType]
 RawExceptionInfo: TypeAlias = ExceptionInfo | tuple[None, None, None]
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+
+def isolated_pytest_asyncio(
+    function: Callable[_P, Coroutine[Any, Any, _R]],
+    /,
+) -> Callable[_P, None]:
+    """Run one migrated pytest coroutine in a fresh, function-scoped loop.
+
+    The returned callable is deliberately synchronous.  The native executor
+    therefore invokes it outside its orchestration loop, allowing ``Runner``
+    to reproduce pytest-asyncio's default one-loop-per-test lifecycle without
+    changing the behavior of native Testenix coroutine tests.
+    """
+
+    @wraps(function)
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> None:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError(
+                "a migrated pytest asyncio test cannot run inside an active event loop"
+            )
+
+        context = contextvars.copy_context()
+        with asyncio.Runner(debug=False) as runner:
+            runner.run(function(*args, **kwargs), context=context)
+
+    return wrapper
 
 
 @dataclass(frozen=True, slots=True)
@@ -485,6 +519,7 @@ __all__ = [
     "UnittestMigrationRuntimeError",
     "UnittestResultProtocolError",
     "UnittestSourceChangedError",
+    "isolated_pytest_asyncio",
     "load_unittest_case",
     "resolve_unittest_source",
     "run_unittest_case",

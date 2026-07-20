@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Annotated, Any, Union, get_args, get_origin, get_type_hints
 
 from testenix.api import get_fixture_metadata
+from testenix.builtin_fixtures import _monkeypatch_fixture, _tmp_path_fixture
 from testenix.contracts import Scope
 
 
@@ -138,6 +139,8 @@ class FixtureDefinition:
     module_name: str | None = None
     path: str | None = None
     provided_type: Any = None
+    autouse: bool = False
+    builtin: bool = False
 
     @property
     def key(self) -> str:
@@ -147,6 +150,22 @@ class FixtureDefinition:
             else self.path or self.module_name or "<global>"
         )
         return f"{owner}::{self.name}"
+
+
+_BUILTIN_DEFINITIONS = {
+    "monkeypatch": FixtureDefinition(
+        name="monkeypatch",
+        function=_monkeypatch_fixture,
+        scope=Scope.TEST,
+        builtin=True,
+    ),
+    "tmp_path": FixtureDefinition(
+        name="tmp_path",
+        function=_tmp_path_fixture,
+        scope=Scope.TEST,
+        builtin=True,
+    ),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,6 +236,7 @@ class FixtureRegistry:
             module_name=module_name,
             path=str(path) if path is not None else None,
             provided_type=_provided_type(function),
+            autouse=metadata.autouse,
         )
         self.add(definition)
         return definition
@@ -246,6 +266,14 @@ class FixtureRegistry:
             local = [definition for definition in named if definition.module_name == module_name]
             return local[0] if local else named[0]
 
+        # Native built-ins are name-only fallbacks. They deliberately do not
+        # participate in type lookup (for example, an arbitrary ``Path``
+        # parameter must not unexpectedly receive ``tmp_path``), and any user
+        # fixture with the same visible name wins above.
+        builtin = _BUILTIN_DEFINITIONS.get(parameter.name)
+        if builtin is not None:
+            return builtin
+
         annotation = parameter.annotation
         if function is not None:
             annotation = _safe_type_hints(function).get(parameter.name, annotation)
@@ -262,6 +290,31 @@ class FixtureRegistry:
                 f"parameter {parameter.name!r} matches multiple fixtures by type: {names}"
             )
         return candidates[0] if candidates else None
+
+    def autouse_for(self, module_name: str | None) -> tuple[FixtureDefinition, ...]:
+        """Return effective implicit fixtures for a module in setup order.
+
+        A module-local definition replaces a global definition with the same
+        name, even when the replacement is not autouse. This keeps normal
+        fixture override rules intact instead of running both providers.
+        """
+
+        effective: dict[str, FixtureDefinition] = {}
+        for definition in self._definitions:
+            if definition.module_name is None:
+                effective.setdefault(definition.name, definition)
+        for definition in self._definitions:
+            if definition.module_name == module_name:
+                effective[definition.name] = definition
+        return tuple(
+            sorted(
+                (definition for definition in effective.values() if definition.autouse),
+                key=lambda definition: (
+                    -_SCOPE_RANK[definition.scope],
+                    definition.key,
+                ),
+            )
+        )
 
 
 class FixtureRuntime:
@@ -322,6 +375,9 @@ class FixtureRuntime:
         if unexpected and not accepts_kwargs:
             names = ", ".join(sorted(unexpected))
             raise FixtureError(f"unexpected case parameters for {function.__name__}: {names}")
+
+        for autouse_definition in self.registry.autouse_for(effective_module):
+            await self._resolve(autouse_definition, parent=None)
 
         for parameter in signature.parameters.values():
             if parameter.name in kwargs or parameter.kind in (

@@ -303,9 +303,18 @@ def render_migration_summary(report: MigrationReport) -> str:
         MigrationStatus.VALIDATION_FAILED: "migration validation failed; no output was published",
         MigrationStatus.SAFETY_ERROR: "migration rejected an unsafe path or concurrent change",
     }[report.status]
+    inventory_label = {
+        MigrationStatus.ANALYZED: "analyzed candidate",
+        MigrationStatus.VALIDATED: "validated candidate",
+        MigrationStatus.PUBLISHED: "converted",
+        MigrationStatus.UNSUPPORTED: "statically convertible subset",
+        MigrationStatus.VALIDATION_FAILED: "generated candidate",
+        MigrationStatus.SAFETY_ERROR: "generated candidate",
+    }[report.status]
     lines = [
         f"Testenix: {headline}",
-        f"  converted: {report.converted_tests} tests in {len(report.generated_files)} files",
+        f"  {inventory_label}: {report.converted_tests} tests in "
+        f"{len(report.generated_files)} files",
         f"  originals modified: {'yes' if report.originals_modified else 'no'}",
         f"  output: {report.output}",
         f"  detail: {report.message}",
@@ -316,15 +325,52 @@ def render_migration_summary(report: MigrationReport) -> str:
         lines.append(_summary_line("native serial", report.native_serial))
     if report.native_parallel is not None:
         lines.append(_summary_line("native parallel", report.native_parallel))
-    for diagnostic in report.diagnostics:
-        location = diagnostic.source
-        if diagnostic.line is not None:
-            location = f"{location}:{diagnostic.line}"
-        lines.append(
-            f"  {diagnostic.severity.value.upper()} {diagnostic.code} {location}: "
-            f"{diagnostic.message}"
-        )
+    lines.extend(_diagnostic_summary(report.diagnostics))
     return "\n".join(lines)
+
+
+def _diagnostic_summary(
+    diagnostics: Sequence[MigrationDiagnostic],
+) -> tuple[str, ...]:
+    """Group repeated console diagnostics without losing JSON report detail."""
+
+    if not diagnostics:
+        return ()
+
+    counts = Counter(diagnostic.severity for diagnostic in diagnostics)
+    groups: dict[tuple[DiagnosticSeverity, str], list[MigrationDiagnostic]] = {}
+    for diagnostic in diagnostics:
+        groups.setdefault((diagnostic.severity, diagnostic.code), []).append(diagnostic)
+
+    error_count = counts[DiagnosticSeverity.ERROR]
+    warning_count = counts[DiagnosticSeverity.WARNING]
+    lines = [
+        f"  diagnostics: {error_count} error(s), {warning_count} warning(s), {len(groups)} code(s)"
+    ]
+    severity_order = {
+        DiagnosticSeverity.ERROR: 0,
+        DiagnosticSeverity.WARNING: 1,
+    }
+    for (severity, code), members in sorted(
+        groups.items(),
+        key=lambda item: (severity_order[item[0][0]], item[0][1]),
+    ):
+        first = members[0]
+        location = first.source
+        if first.line is not None:
+            location = f"{location}:{first.line}"
+        if len(members) == 1:
+            lines.append(f"  {severity.value.upper()} {code} {location}: {first.message}")
+            continue
+        source_count = len({diagnostic.source for diagnostic in members})
+        lines.append(
+            f"  {severity.value.upper()} {code}: {len(members)} occurrence(s) in "
+            f"{source_count} file(s); first at {location}: {first.message}"
+        )
+
+    if len(diagnostics) > len(groups):
+        lines.append("  diagnostic detail: --report-json FILE|- retains every line-addressed entry")
+    return tuple(lines)
 
 
 def _summary_line(label: str, summary: ValidationSummary) -> str:
@@ -397,24 +443,24 @@ def migrate(options: MigrationOptions) -> MigrationReport:
         output_relative=paths.output.relative_to(paths.project_root),
     )
     bundle = plan.bundle
+    if plan.resolved_framework in {"pytest", "mixed"}:
+        from testenix.migration_pytest_config import pytest_asyncio_config_diagnostics
+
+        # This is a static preflight over the exact source invocation. The serial and
+        # parallel shadow runs below remain the authoritative behavioral gates.
+        asyncio_config_diagnostics = pytest_asyncio_config_diagnostics(
+            project_root=paths.project_root,
+            source_paths=paths.sources,
+            files=source_files,
+        )
+        if asyncio_config_diagnostics:
+            bundle = _merge_bundles(
+                bundle,
+                ConversionBundle(diagnostics=asyncio_config_diagnostics),
+            )
     source_hashes = {source.project_relative.as_posix(): source.sha256 for source in source_files}
     generated_files = tuple(artifact.relative_path.as_posix() for artifact in bundle.artifacts)
     diagnostics = bundle.diagnostics
-    affinity_units = {mapping.target_file for mapping in bundle.mappings}
-    if bundle.mappings and len(affinity_units) < 2:
-        diagnostics = (
-            *diagnostics,
-            MigrationDiagnostic(
-                code="MIG006",
-                message=(
-                    "the parallel validation command is configured with at least two workers, "
-                    "but this converted suite has one module affinity unit and therefore "
-                    "executes on one worker"
-                ),
-                source="<migration>",
-                severity=DiagnosticSeverity.WARNING,
-            ),
-        )
     context = _ReportContext(
         framework=plan.resolved_framework,
         project_root=paths.project_root,
@@ -466,6 +512,21 @@ def migrate(options: MigrationOptions) -> MigrationReport:
             message="all selected constructs are supported; no tests were run and no files written",
             context=context,
         )
+
+    affinity_units = {mapping.target_file for mapping in bundle.mappings}
+    if len(affinity_units) < 2:
+        diagnostic = MigrationDiagnostic(
+            code="MIG006",
+            message=(
+                "the parallel validation command is configured with at least two workers, "
+                "but this converted suite has one module affinity unit and therefore "
+                "executes on one worker"
+            ),
+            source="<migration>",
+            severity=DiagnosticSeverity.WARNING,
+        )
+        diagnostics = (*diagnostics, diagnostic)
+        context = replace(context, diagnostics=diagnostics)
 
     baseline: ValidationSummary | None = None
     native_serial: ValidationSummary | None = None

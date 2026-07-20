@@ -5,6 +5,8 @@ project intends to use Semantic Versioning once its public API reaches stability
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-20
+
 ### Added
 
 - `testenix pytest [PYTEST_ARGS ...]` compatibility bridge for unchanged pytest suites, preserving
@@ -28,6 +30,25 @@ project intends to use Semantic Versioning once its public API reaches stability
 - Truthful post-commit durability/report warnings, package-aware unittest outcome mapping,
   Testenix validation-worker containment, and conservative blocking of pytest session fixtures and
   unittest class-cleanup hooks whose lifecycle cannot be preserved.
+- Native `tmp_path` and transactional `monkeypatch` fixtures. The initial monkeypatch contract
+  covers the object/attribute and dotted-import forms of `setattr`, plus `setenv`, with automatic
+  per-test rollback. Static module-local helper calls are accepted only when every propagated use
+  can be proven safe; aliases, dynamic rebinding, unsupported methods, and escaped values remain
+  blocked.
+- Safe conversion of bare `@pytest.mark.asyncio` coroutine tests, simple pytest classes through
+  fresh-instance wrappers, and statically declared autouse fixtures. Async migration creates and
+  closes an isolated `asyncio.Runner` per test or case, validates effective pytest-asyncio loop and
+  debug configuration, and blocks custom event-loop policies or unmarked async semantics.
+- Fail-closed class conversion for lifecycle hooks, decorated or inherited classes, annotated
+  class state, custom constructors, and method defaults that cannot be preserved by wrappers.
+
+### Changed
+
+- Migration console output now distinguishes analyzed, validated, generated, and published
+  candidates. Repeated diagnostics are grouped by code, while JSON audit reports retain every
+  source- and line-addressed entry.
+- The one-affinity-unit `MIG006` warning is emitted only for statically supported check/publication
+  candidates, not for dry-run or already-blocked migrations.
 
 ## [0.1.0] - 2026-07-20
 

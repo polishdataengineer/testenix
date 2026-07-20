@@ -101,6 +101,11 @@ testenix run tests_testenix
 For pytest migration, install `testenix[pytest]`; unittest migration uses the standard library.
 `auto` supports pytest and unittest in separate modules within one selection.
 
+Large unsupported suites get a grouped console summary instead of one wall of repeated lines.
+Use `--report-json FILE` or `--report-json -` to retain every individual diagnostic with its source
+and line. A blocked run labels safe in-memory mappings as a *statically convertible subset*; only a
+report with `status: published` means that Testenix created the requested output.
+
 This is a copy-and-validate transaction, not an in-place rewrite. Testenix fingerprints the
 sources, generates into private staging, runs the green original suite in a disposable project
 copy, runs the native candidate with one worker and again in parallel, compares inventory and
@@ -111,13 +116,19 @@ rename, Testenix warns without pretending the already published output was rolle
 paths must be new, inside the project, and disjoint from both source and generated suites. There is
 no `--force` option, and old tests are never deleted or renamed.
 
-The converter stops on semantics it cannot preserve. Its current pytest subset covers module
-functions, one static parametrization, simple local/adjacent-conftest fixtures, static skips, and
-plain markers. The unittest adapter preserves per-test lifecycle and assertions by generating
-native wrappers around the original `TestCase.run()` protocol; those wrappers locate originals
-independently of `cwd` and verify the complete selected-Python-source SHA-256 manifest, so the old
-unittest files must remain present. Keep the generated unittest directory at its published path as
-well; rerun migration after moving either side.
+The converter stops on semantics it cannot preserve. The v0.2 pytest subset covers module
+functions, one static parametrization, simple local/adjacent-conftest fixtures, statically declared
+autouse fixtures, bare `@pytest.mark.asyncio` coroutine tests through fresh function-scoped loop
+wrappers, and simple pytest classes. Native `tmp_path` and a dependency-free `monkeypatch`
+implementation cover the common `setattr` and `setenv` forms with automatic per-test rollback,
+including calls through statically provable module-local helpers. Complex class lifecycle, async
+fixtures, unmarked async tests, configured async loop scopes or debug mode, custom
+`event_loop_policy`, and the rest of pytest's built-in fixtures remain blocked. The unittest adapter
+preserves per-test lifecycle and assertions by generating native wrappers around the original
+`TestCase.run()` protocol; those wrappers locate originals independently of `cwd` and verify the
+complete selected-Python-source SHA-256 manifest, so the old unittest files must remain present.
+Keep the generated unittest directory at its published path as well; rerun migration after moving
+either side.
 
 See the full [safe migration guide](https://polishdataengineer.github.io/testenix/guides/migration/)
 for the support matrix, rollback contract, CI rollout, audit-report schema, and performance
@@ -218,7 +229,7 @@ test.
 
 ## Where Testenix is deliberately different
 
-The `testenix run` engine is not a native drop-in reimplementation of pytest. Its v0.1 value is a
+The `testenix run` engine is not a native drop-in reimplementation of pytest. Its v0.2 value is a
 smaller, coherent native stack: async tests and async fixtures need no plugin, parallel execution
 and duration-aware scheduling need no xdist, every retry remains visible, and a worker crash cannot
 silently erase tests that completed before it. The native runtime has no third-party dependencies.
@@ -287,7 +298,8 @@ See the [generated results and chart](https://polishdataengineer.github.io/teste
   JSON-safe representation when a value itself is not serializable.
 - Synchronous test and fixture bodies run outside Testenix's internal asyncio loop. APIs restricted
   to Python's main thread, such as installing signal handlers, are not supported inside those
-  bodies in v0.1.
+  bodies in v0.2. Migrated pytest-asyncio wrappers are synchronous from Testenix's perspective and
+  therefore share this restriction while creating a fresh event loop for each test or case.
 - On Windows, a script that calls the programmatic `run()`/`run_async()` API must use the standard
   `if __name__ == "__main__":` multiprocessing guard. The `testenix` CLI handles process startup
   itself.
@@ -300,12 +312,12 @@ See the [generated results and chart](https://polishdataengineer.github.io/teste
   create 3,000 parallel units; spread independent tests across modules and measure the generated
   suite before making a project-specific speed claim.
 - Test impact analysis, result caching, remote workers, and deep pytest-result aggregation are not
-  part of version 0.1.
+  part of version 0.2.
 
 ## Project status
 
-Testenix is pre-1.0 software. The distribution, import package, CLI, configuration namespace, and
-state directory consistently use `testenix`. The project is licensed under MIT and its release
+Testenix 0.2.0 is pre-1.0 software. The distribution, import package, CLI, configuration namespace,
+and state directory consistently use `testenix`. The project is licensed under MIT and its release
 workflow uses PyPI Trusted Publishing; the first PyPI release has not been published yet.
 
 ## Development
