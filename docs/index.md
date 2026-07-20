@@ -14,26 +14,49 @@ description: Testenix is an async-native, parallel-first Python testing framewor
   <div class="testenix-actions">
     <a href="getting-started/">Start testing</a>
     <a href="guides/pytest-compatibility/">Run pytest suites</a>
-    <a href="guides/migration/">Migrate safely</a>
-    <a href="benchmarks/results/">See the benchmarks</a>
-    <a href="for-llms/">Copy docs for an LLM</a>
+  </div>
+  <div class="testenix-quick-links">
+    <a href="guides/migration/">Migration guide →</a>
+    <a href="benchmarks/results/">Benchmarks →</a>
   </div>
 </div>
 
 ```{toctree}
 :hidden:
+:caption: Start
 :maxdepth: 2
 
 getting-started
 guides/pytest-compatibility
 guides/migration
+```
+
+```{toctree}
+:hidden:
+:caption: Guides
+:maxdepth: 2
+
 guides/writing-tests
 guides/fixtures
 guides/parallelism
 guides/reports
+```
+
+```{toctree}
+:hidden:
+:caption: Reference
+:maxdepth: 2
+
 reference/cli
 reference/configuration
 reference/api
+```
+
+```{toctree}
+:hidden:
+:caption: Project
+:maxdepth: 2
+
 benchmarks/results
 benchmarking
 performance-analysis

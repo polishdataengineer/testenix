@@ -6,30 +6,60 @@
   --testenix-border: #bfdbfe;
 }
 
+body {
+  --sidebar-tree-space-above: 1rem;
+  --sidebar-caption-space-above: 0.75rem;
+  --sidebar-item-spacing-vertical: 0.375rem;
+  --sidebar-item-spacing-horizontal: 0.875rem;
+  --toc-spacing-vertical: 1rem;
+  --toc-spacing-horizontal: 1.125rem;
+  --toc-item-spacing-vertical: 0.3rem;
+}
+
+/* Furo scales the entire interface to 110% on very wide screens. Keep the
+   documentation density consistent instead of enlarging every rem-based UI. */
+@media (min-width: 97em) {
+  html {
+    font-size: 100%;
+  }
+}
+
+.sidebar-brand-text {
+  font-size: 1.25rem;
+}
+
 body[data-theme="dark"] {
   --testenix-surface: #111c35;
   --testenix-border: #334a78;
 }
 
+@media (prefers-color-scheme: dark) {
+  body[data-theme="auto"] {
+    --testenix-surface: #111c35;
+    --testenix-border: #334a78;
+  }
+}
+
 .testenix-hero {
-  margin: 0 0 2rem;
-  padding: clamp(1.5rem, 4vw, 3rem);
+  clear: both;
+  margin: 0 0 1.5rem;
+  padding: clamp(1.25rem, 3vw, 2rem);
   overflow: hidden;
   color: #f8fafc;
   background:
     radial-gradient(circle at 90% 10%, rgb(96 165 250 / 35%), transparent 35%),
     linear-gradient(135deg, #172554 0%, #1d4ed8 52%, #6d28d9 100%);
-  border-radius: 1.25rem;
-  box-shadow: 0 1.25rem 3rem rgb(30 64 175 / 20%);
+  border-radius: 1rem;
+  box-shadow: 0 0.75rem 2rem rgb(30 64 175 / 16%);
 }
 
 .testenix-title {
-  margin: 0.2rem 0 0.75rem;
+  margin: 0.15rem 0 0.6rem;
   color: #fff;
   font-weight: 700;
-  font-size: clamp(2.3rem, 7vw, 4.3rem);
-  line-height: 1.1;
-  letter-spacing: -0.05em;
+  font-size: clamp(2rem, 4.5vw, 3.1rem);
+  line-height: 1.05;
+  letter-spacing: -0.035em;
 }
 
 section#testenix > h1 {
@@ -45,10 +75,11 @@ section#testenix > h1 {
 }
 
 .testenix-hero p {
-  max-width: 44rem;
+  max-width: 40rem;
   margin: 0;
   color: #dbeafe;
-  font-size: 1.1rem;
+  font-size: 1rem;
+  line-height: 1.5;
 }
 
 .testenix-kicker {
@@ -62,20 +93,20 @@ section#testenix > h1 {
 .testenix-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.75rem;
-  margin-top: 1.5rem;
+  gap: 0.5rem;
+  margin-top: 1rem;
 }
 
 .testenix-actions a,
-.llm-toolbar button,
-.llm-toolbar a,
 .llm-primary-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 2.5rem;
-  padding: 0.55rem 0.9rem;
+  box-sizing: border-box;
+  min-height: 2.25rem;
+  padding: 0.4rem 0.75rem;
   font: inherit;
+  font-size: 0.9rem;
   font-weight: 650;
   line-height: 1.2;
   text-decoration: none;
@@ -95,15 +126,32 @@ section#testenix > h1 {
   border-color: rgb(255 255 255 / 35%);
 }
 
+.testenix-quick-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+}
+
+.testenix-quick-links a {
+  color: #dbeafe;
+  text-underline-offset: 0.2rem;
+}
+
+.testenix-quick-links a:hover {
+  color: #fff;
+}
+
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
-  gap: 0.8rem;
-  margin: 1.5rem 0 2rem;
+  gap: 0.625rem;
+  margin: 1rem 0 1.5rem;
 }
 
 .metric-card {
-  padding: 1rem;
+  padding: 0.75rem;
   background: var(--testenix-surface);
   border: 1px solid var(--testenix-border);
   border-radius: 0.8rem;
@@ -113,7 +161,7 @@ section#testenix > h1 {
   display: block;
   margin-bottom: 0.15rem;
   color: var(--color-brand-content);
-  font-size: 1.35rem;
+  font-size: 1.2rem;
 }
 
 .metric-card span {
@@ -124,17 +172,39 @@ section#testenix > h1 {
 .llm-toolbar {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: 0.35rem;
   align-items: center;
-  margin: 0 0 1.25rem;
-  padding: 0.7rem;
-  background: var(--testenix-surface);
-  border: 1px solid var(--testenix-border);
-  border-radius: 0.75rem;
+  margin: 0 0 1rem;
+  padding: 0.3rem 0;
+  font-size: 0.8rem;
+  border-bottom: 1px solid var(--testenix-border);
 }
 
 .llm-toolbar button,
-.llm-toolbar a,
+.llm-toolbar a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-height: 2.25rem;
+  padding: 0.35rem 0.65rem;
+  font: inherit;
+  font-weight: 650;
+  line-height: 1.2;
+  text-decoration: none;
+  cursor: pointer;
+  color: var(--color-brand-content);
+  background: var(--color-background-primary);
+  border: 1px solid var(--testenix-border);
+  border-radius: 0.5rem;
+}
+
+.llm-toolbar-label {
+  margin-right: auto;
+  color: var(--color-foreground-muted);
+  font-weight: 650;
+}
+
 .llm-primary-button {
   color: var(--color-brand-content);
   background: var(--color-background-primary);
@@ -149,9 +219,8 @@ section#testenix > h1 {
 }
 
 .llm-copy-status {
-  min-width: 7rem;
   color: var(--color-foreground-muted);
-  font-size: 0.82rem;
+  font-size: 0.75rem;
 }
 
 .benchmark-chart {
@@ -174,7 +243,26 @@ section#testenix > h1 {
 
 @media (max-width: 46rem) {
   .testenix-hero {
+    padding: 1.1rem;
     border-radius: 0.8rem;
+  }
+
+  .testenix-title {
+    font-size: clamp(2rem, 11vw, 2.65rem);
+  }
+
+  .testenix-actions a {
+    flex: 1 1 auto;
+  }
+
+  .llm-toolbar-label {
+    display: none;
+  }
+
+  .llm-toolbar button,
+  .llm-toolbar a {
+    padding-right: 0.5rem;
+    padding-left: 0.5rem;
   }
 
   .llm-copy-status {
