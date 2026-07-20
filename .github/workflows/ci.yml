@@ -68,6 +68,8 @@ jobs:
           wheel_path="$(find dist -maxdepth 1 -type f -name '*.whl' -print -quit)"
           uv run --isolated --no-project --with "testenix[pytest] @ $wheel_path" testenix pytest --version
           uv run --isolated --no-project --with "testenix[pytest] @ $wheel_path" --with "pytest==8.3.0" testenix pytest --version
+          uv run --isolated --no-project --with "testenix[pytest] @ $wheel_path" testenix migrate pytest examples/migration_pytest/tests --check --output .testenix-ci-pytest-migration
+          uv run --isolated --no-project --with "$wheel_path" testenix migrate unittest examples/migration_unittest/tests --check --output .testenix-ci-unittest-migration
       - run: uv run --isolated --no-project --with ./dist/testenix-*.tar.gz testenix --version
       - run: uv run --isolated --no-project --with ./dist/testenix-*.tar.gz testenix run examples/basic --no-history
 

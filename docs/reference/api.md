@@ -72,6 +72,43 @@ Mark a test as expected to fail. An unexpected pass becomes the gating `XPASS` s
    :members:
 ```
 
+## Migration
+
+The programmatic API follows the same copy-only transaction as `testenix migrate`. `project_root`
+defaults to the current directory. Prefer `dry_run=True` before a validating or publishing call.
+
+```python
+from pathlib import Path
+
+from testenix import MigrationOptions, migrate
+
+report = migrate(
+    MigrationOptions(
+        framework="auto",
+        sources=(Path("tests"),),
+        output=Path("tests_testenix"),
+        check_only=True,
+    )
+)
+assert report.originals_modified is False
+```
+
+```{eval-rst}
+.. autofunction:: testenix.migrate
+
+.. autoclass:: testenix.MigrationOptions
+   :members:
+
+.. autoclass:: testenix.MigrationReport
+   :members:
+
+.. autoclass:: testenix.MigrationStatus
+   :members:
+
+.. autoclass:: testenix.ValidationSummary
+   :members:
+```
+
 ## Events
 
 ```{eval-rst}

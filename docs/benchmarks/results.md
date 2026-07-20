@@ -92,6 +92,80 @@ It remains a synthetic result from one machine, not a universal performance prom
 - Clean working tree at capture: yes
 - [Raw JSON](https://github.com/polishdataengineer/testenix/blob/main/benchmarks/baseline_100k.json)
 
+## Migrated-suite measurements
+
+These separate measurements start with generated pytest or unittest sources, complete one safe
+copy-and-validate migration, and then compare recurring source-suite runs with recurring native
+Testenix runs. The migration transaction is a one-time cost shown separately; it is not included
+in either execution median.
+
+| Source runner | Workload | Tests / modules | Source median | Native median | Native vs source | Migration transaction |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| pytest (sequential) | no-op | 3,000 / 64 | 2.070 s | 0.636 s | 3.26× faster | 7.932 s |
+| stdlib unittest (sequential) | no-op | 3,000 / 64 | 0.223 s | 1.388 s | 6.23× slower | 6.292 s |
+| stdlib unittest (sequential) | 1 ms body | 3,000 / 64 | 4.106 s | 2.451 s | 1.68× faster | 19.686 s |
+
+The native side used four workers. The source pytest and stdlib unittest baselines were sequential,
+so these rows do not compare Testenix with pytest-xdist or another parallel unittest runner. The
+no-op unittest wrappers are 6.23× slower than direct stdlib execution because wrapper, loading, and
+result-adaptation costs dominate an empty body. With 1 ms of synthetic work per unittest method,
+parallel native execution is 1.68× faster in this 64-module layout. Module count and duration are
+therefore material, and none of these synthetic rows predicts a specific real project.
+
+### Raw migration samples and variance
+
+### pytest / no-op
+
+- Source median: 2.070 s
+- Source range: 2.030 s–2.084 s;
+  standard deviation: 0.021 s
+- Source raw samples: 2.084, 2.030, 2.070, 2.076, 2.055 seconds
+- Native Testenix median: 0.636 s
+- Native Testenix range: 0.624 s–0.673 s;
+  standard deviation: 0.019 s
+- Native Testenix raw samples: 0.643, 0.630, 0.673, 0.624, 0.636 seconds
+- Native workers: 4
+- Measured rounds: 5; warmups: 1
+- One-time copy, validation, and publication transaction: 7.932 s
+- Integrity gates: 3,000 converted tests, matching source/native outcomes,
+  original SHA-256 values unchanged
+- [Raw JSON](https://github.com/polishdataengineer/testenix/blob/main/benchmarks/migration_baseline_pytest_3000.json)
+
+### unittest / no-op
+
+- Source median: 0.223 s
+- Source range: 0.202 s–0.546 s;
+  standard deviation: 0.147 s
+- Source raw samples: 0.239, 0.546, 0.223, 0.202, 0.209 seconds
+- Native Testenix median: 1.388 s
+- Native Testenix range: 1.213 s–3.813 s;
+  standard deviation: 1.093 s
+- Native Testenix raw samples: 1.718, 3.813, 1.213, 1.388, 1.307 seconds
+- Native workers: 4
+- Measured rounds: 5; warmups: 1
+- One-time copy, validation, and publication transaction: 6.292 s
+- Integrity gates: 3,000 converted tests, matching source/native outcomes,
+  original SHA-256 values unchanged
+- [Raw JSON](https://github.com/polishdataengineer/testenix/blob/main/benchmarks/migration_baseline_unittest_3000.json)
+
+### unittest / 1 ms body
+
+- Source median: 4.106 s
+- Source range: 4.057 s–4.122 s;
+  standard deviation: 0.030 s
+- Source raw samples: 4.122, 4.112, 4.106, 4.061, 4.057 seconds
+- Native Testenix median: 2.451 s
+- Native Testenix range: 2.315 s–2.717 s;
+  standard deviation: 0.157 s
+- Native Testenix raw samples: 2.717, 2.518, 2.451, 2.362, 2.315 seconds
+- Native workers: 4
+- Measured rounds: 5; warmups: 1
+- One-time copy, validation, and publication transaction: 19.686 s
+- Integrity gates: 3,000 converted tests, matching source/native outcomes,
+  original SHA-256 values unchanged
+- [Raw JSON](https://github.com/polishdataengineer/testenix/blob/main/benchmarks/migration_baseline_unittest_3000_delay_1ms.json)
+
+
 ## Interpretation
 
 The checked-in results show that Testenix has low per-test overhead for large generated suites and
@@ -113,6 +187,15 @@ $ uv sync --locked --dev --no-editable
 $ uv run python benchmarks/run_benchmark.py --tests 10000 --workers 4 --repeats 5
 $ uv run python benchmarks/run_benchmark.py --tests 10000 --workers 4 --repeats 5 --uneven
 $ uv run python benchmarks/run_benchmark.py --tests 100000 --workers 4 --repeats 5
+$ uv run python benchmarks/run_migration_benchmark.py --framework pytest --tests 3000 \
+    --modules 64 --workers 4 --warmups 1 --repeats 5 \
+    --output benchmarks/migration_baseline_pytest_3000.json
+$ uv run python benchmarks/run_migration_benchmark.py --framework unittest --tests 3000 \
+    --modules 64 --workers 4 --warmups 1 --repeats 5 \
+    --output benchmarks/migration_baseline_unittest_3000.json
+$ uv run python benchmarks/run_migration_benchmark.py --framework unittest --tests 3000 \
+    --modules 64 --workers 4 --delay-ms 1 --warmups 1 --repeats 5 \
+    --output benchmarks/migration_baseline_unittest_3000_delay_1ms.json
 ```
 
 Review the [benchmarking contract](../benchmarking.md) before comparing or publishing new data.

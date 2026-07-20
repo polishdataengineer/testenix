@@ -17,6 +17,13 @@ These results do not apply to `testenix pytest`. The compatibility command deleg
 has pytest execution performance plus launcher and adapter overhead, which has not yet been
 measured separately.
 
+The new safe-migration baseline is deliberately mixed rather than uniformly positive. For 3,000
+no-op pytest tests across 64 modules, the generated native suite was 3.26x faster than sequential
+pytest. Empty unittest wrappers were 6.23x slower than the sequential stdlib-based outcome probe, while the same
+layout with 1 ms of work in each method was 1.68x faster under four native workers. These are
+synthetic, sequential-source comparisons; they do not establish an advantage over pytest-xdist,
+parallel unittest runners, or a real repository.
+
 ## Environment and method
 
 - Apple M4 Pro, 14 logical CPUs, 24 GiB RAM;
@@ -53,6 +60,40 @@ approximately 513 MiB after the final manifest/event optimization. Sequential py
 approximately 520 MiB on the same generated suite. These older macOS `time` figures are not part of
 the current baseline JSON and are process maxima, not aggregate memory across every xdist/Testenix
 child process.
+
+### Migrated-suite measurements
+
+The migration harness generates a source suite, migrates and validates it without modifying any
+source SHA-256, then measures the original source runner and the published native copy in
+alternating rounds. All three checked-in scenarios contain 3,000 tests across 64 modules, use one
+warm-up and five measured rounds, and run native Testenix with four workers on the M4 Pro/CPython
+3.11 environment described above.
+
+| Source runner | Test body | Source median | Native Testenix median | Native vs source | Migration transaction |
+|---|---|---:|---:|---:|---:|
+| sequential pytest | no-op | 2.070 s | 0.636 s | 3.26x faster | 7.932 s |
+| sequential unittest outcome probe | no-op | 0.223 s | 1.388 s | 6.23x slower | 6.292 s |
+| sequential unittest outcome probe | 1 ms sleep | 4.106 s | 2.451 s | 1.68x faster | 19.686 s |
+
+The transaction duration is reported separately from recurring execution. It includes generation,
+the source baseline, serial and parallel native candidates, parity checks, source rehashing, and
+atomic publication. The 1 ms unittest transaction is longer because validation executes the
+synthetic work repeatedly. Conversion is therefore an occasional safety cost, not a per-CI-run
+speedup input.
+
+The no-op unittest row exposes the adapter's fixed cost: each native test is a wrapper that loads
+the unchanged source and translates the result of `TestCase.run()`. The sequential source probe
+uses the stdlib loader and result semantics, then serializes per-test outcomes; it wins
+when the test body does essentially nothing. With 1 ms per method, four-worker execution across 64
+modules amortizes that cost and overtakes the sequential source runner. A suite concentrated in
+one module would expose only one affinity unit, while too many workers can add process and import
+overhead. Test duration, module distribution, imports, fixtures, I/O, failures, operating system,
+and competing parallel runners must all be measured on the target project.
+
+The generated [benchmark results](benchmarks/results.md) publish every sample, range, standard
+deviation, command, environment field, and raw JSON link. These three synthetic records are useful
+for finding overhead boundaries; they are not evidence that converted suites are universally
+faster.
 
 ### Worker-count sensitivity
 
@@ -113,6 +154,13 @@ and CPython object interaction remain Python work. PyO3 can release the interpre
 performing Rust-only work; it cannot make arbitrary Python callbacks execute in parallel under the
 GIL.
 
+The migration path does not change that decision. Parsing Python ASTs, hashing and copying files,
+and publishing a new directory happen only when regenerating a suite, while most validation time
+comes from executing the source and candidate Python tests. A Rust converter would not shorten a
+1 ms Python test body or `unittest.TestCase.run()`. The empty-unittest result instead points to
+profiling wrapper loading and result adaptation, then optimizing or caching those Python-level
+boundaries without weakening SHA verification and fail-closed publication.
+
 Direction-finding microbenchmarks on this machine showed:
 
 | Candidate | Current signal | Rust/PyO3 result | Decision |
@@ -143,6 +191,8 @@ Relevant upstream constraints are documented in the
 - synchronous and asynchronous fixtures, failures, captured output, timeouts, and retries;
 - cold and warm SQLite history runs;
 - real project suites and Linux/macOS/Windows CI runners;
+- real migrated pytest and unittest suites, including sequential and established parallel source
+  runners, multiple module layouts, and a break-even curve by median test duration;
 - checkpoint-batched IPC followed by another profile;
 - persistent workers that collect and execute without importing every module twice.
 

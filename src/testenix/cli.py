@@ -10,20 +10,26 @@ The CLI calls this synchronous service; async embedders use ``testenix.run_async
 from __future__ import annotations
 
 import argparse
+import math
+import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from testenix import __version__
 from testenix.config import ConfigError, TestenixConfig, load_config
 from testenix.contracts import RunResult
 from testenix.reporters import ConsoleReporter, JsonReporter, JUnitReporter
 
+if TYPE_CHECKING:
+    from testenix.migration_service import MigrationOptions, MigrationReport
+
 EXIT_OK = 0
 EXIT_TEST_FAILURE = 1
 EXIT_USAGE = 2
 EXIT_INTERNAL_ERROR = 3
+EXIT_UNSUPPORTED = 4
 EXIT_INTERRUPTED = 130
 
 
@@ -77,6 +83,62 @@ def build_parser() -> argparse.ArgumentParser:
         help="run an existing pytest suite through the compatibility adapter",
     )
     pytest_parser.set_defaults(handler=_misplaced_pytest_command)
+
+    migrate_parser = subparsers.add_parser(
+        "migrate",
+        help="convert a supported pytest or unittest suite to native Testenix safely",
+    )
+    migrate_parser.add_argument(
+        "framework",
+        choices=("auto", "pytest", "unittest"),
+        help="source framework; auto may combine separate pytest and unittest modules",
+    )
+    migrate_parser.add_argument(
+        "paths",
+        nargs="+",
+        help="source test files or directories",
+    )
+    migrate_parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=Path("testenix_migrated"),
+        help="new output directory; it must not already exist (default: testenix_migrated)",
+    )
+    migrate_parser.add_argument(
+        "-w",
+        "--workers",
+        type=_migration_worker_count,
+        default="auto",
+        help="worker count for parallel candidate validation (default: auto)",
+    )
+    migrate_parser.add_argument(
+        "--validation-timeout",
+        type=_positive_float,
+        default=300.0,
+        metavar="SECONDS",
+        help="deadline for each validation run (default: 300)",
+    )
+    migration_mode = migrate_parser.add_mutually_exclusive_group()
+    migration_mode.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="analyze support without running tests or writing the output",
+    )
+    migration_mode.add_argument(
+        "--check",
+        action="store_true",
+        help="convert and validate in temporary copies without publishing the output",
+    )
+    migrate_parser.add_argument(
+        "--report-json",
+        metavar="FILE|-",
+        help=(
+            "write the audit report to a new in-project file outside source/output suites, "
+            "or '-' for stdout; never overwrite"
+        ),
+    )
+    migrate_parser.set_defaults(handler=_migrate_command)
     return parser
 
 
@@ -180,6 +242,90 @@ def _misplaced_pytest_command(arguments: argparse.Namespace) -> int:
     return EXIT_USAGE
 
 
+def _migrate_command(arguments: argparse.Namespace) -> int:
+    from testenix.migration_fs import (
+        MigrationFilesystemError,
+        validate_migration_paths,
+        validate_migration_report_path,
+    )
+    from testenix.migration_service import (
+        MigrationOptions,
+        render_migration_summary,
+        write_migration_report,
+    )
+
+    options = MigrationOptions(
+        framework=arguments.framework,
+        sources=tuple(Path(path) for path in arguments.paths),
+        output=arguments.output,
+        workers=arguments.workers,
+        validation_timeout=arguments.validation_timeout,
+        dry_run=arguments.dry_run,
+        check_only=arguments.check,
+    )
+    report_path: Path | None = None
+    if arguments.report_json and arguments.report_json != "-":
+        requested_report = Path(arguments.report_json).expanduser()
+        if os.path.lexists(requested_report):
+            print(
+                f"testenix: cannot write migration report: path already exists and "
+                f"will not be replaced: {requested_report}",
+                file=sys.stderr,
+            )
+            return EXIT_INTERNAL_ERROR
+        try:
+            migration_paths = validate_migration_paths(
+                Path.cwd(),
+                options.sources,
+                options.output,
+            )
+            report_path = validate_migration_report_path(
+                migration_paths,
+                requested_report,
+            )
+        except MigrationFilesystemError as error:
+            print(f"testenix: unsafe migration report path: {error}", file=sys.stderr)
+            return EXIT_USAGE
+
+    try:
+        report = _call_migrator(options)
+    except KeyboardInterrupt:
+        raise
+    except Exception as error:  # the CLI is the final application boundary
+        print(f"testenix: migration error: {error}", file=sys.stderr)
+        return EXIT_INTERNAL_ERROR
+
+    summary = render_migration_summary(report)
+    stream = sys.stderr if report.exit_code or arguments.report_json == "-" else sys.stdout
+    print(summary, file=stream)
+    if arguments.report_json == "-":
+        print(report.to_json(), end="")
+    elif report_path is not None:
+        try:
+            write_migration_report(report, report_path)
+        except OSError as error:
+            qualifier = " after successful publication" if report.published else ""
+            print(
+                f"testenix: cannot write migration report{qualifier}: {error}",
+                file=sys.stderr,
+            )
+            if report.published:
+                print(
+                    "testenix: the migrated output is complete and remains published; "
+                    "only the optional report write failed",
+                    file=sys.stderr,
+                )
+                return report.exit_code
+            return EXIT_INTERNAL_ERROR
+    return report.exit_code
+
+
+def _call_migrator(options: MigrationOptions) -> MigrationReport:
+    from testenix.migration_service import migrate
+
+    return migrate(options)
+
+
 def _worker_count(value: str) -> int | str:
     if value == "auto":
         return value
@@ -189,4 +335,23 @@ def _worker_count(value: str) -> int | str:
         raise argparse.ArgumentTypeError("workers must be 'auto' or an integer") from error
     if workers < 1:
         raise argparse.ArgumentTypeError("workers must be at least 1")
+    return workers
+
+
+def _positive_float(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("value must be a number") from error
+    if parsed <= 0 or not math.isfinite(parsed):
+        raise argparse.ArgumentTypeError("value must be a finite number greater than zero")
+    return parsed
+
+
+def _migration_worker_count(value: str) -> int | str:
+    workers = _worker_count(value)
+    if isinstance(workers, int) and workers < 2:
+        raise argparse.ArgumentTypeError(
+            "migration workers must be at least 2 for the parallel validation gate"
+        )
     return workers

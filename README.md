@@ -81,6 +81,48 @@ not apply to it. See the
 [pytest compatibility guide](https://polishdataengineer.github.io/testenix/guides/pytest-compatibility/)
 for the complete capability matrix and migration choices.
 
+## Convert pytest or unittest tests to native Testenix
+
+The safe migrator creates a new native suite while leaving every original test untouched:
+
+```bash
+# inspect static support only
+testenix migrate auto tests --dry-run
+
+# run the source baseline plus serial and parallel candidates, but publish nothing
+testenix migrate auto tests --check --report-json reports/migration-check.json
+
+# validate and atomically create a new directory
+testenix migrate pytest tests --output tests_testenix \
+  --report-json reports/migration.json
+testenix run tests_testenix
+```
+
+For pytest migration, install `testenix[pytest]`; unittest migration uses the standard library.
+`auto` supports pytest and unittest in separate modules within one selection.
+
+This is a copy-and-validate transaction, not an in-place rewrite. Testenix fingerprints the
+sources, generates into private staging, runs the green original suite in a disposable project
+copy, runs the native candidate with one worker and again in parallel, compares inventory and
+outcome totals plus every mapped test outcome, rechecks every source hash, and only then performs
+an atomic no-overwrite publish. Any validation or publication failure before that rename leaves
+the requested output absent. If only the optional audit-report write fails after a successful
+rename, Testenix warns without pretending the already published output was rolled back. Report
+paths must be new, inside the project, and disjoint from both source and generated suites. There is
+no `--force` option, and old tests are never deleted or renamed.
+
+The converter stops on semantics it cannot preserve. Its current pytest subset covers module
+functions, one static parametrization, simple local/adjacent-conftest fixtures, static skips, and
+plain markers. The unittest adapter preserves per-test lifecycle and assertions by generating
+native wrappers around the original `TestCase.run()` protocol; those wrappers locate originals
+independently of `cwd` and verify the complete selected-Python-source SHA-256 manifest, so the old
+unittest files must remain present. Keep the generated unittest directory at its published path as
+well; rerun migration after moving either side.
+
+See the full [safe migration guide](https://polishdataengineer.github.io/testenix/guides/migration/)
+for the support matrix, rollback contract, CI rollout, audit-report schema, and performance
+interpretation for suites with thousands of tests.
+
 ## Native quick start
 
 Create `tests/test_multiplication.py` with this complete example:
@@ -159,6 +201,7 @@ execution process trees before returning control to the caller.
 | `1` | A test failed, errored, timed out, crashed, unexpectedly passed, or was finalized as flaky. |
 | `2` | Collection, command/configuration error, or an explicit tag filter selected no tests. |
 | `3` | Internal runner, report, or history error. |
+| `4` | Migration found an unsupported construct and published nothing. |
 | `130` | Interrupted by the user. |
 
 ## Result semantics
@@ -183,6 +226,10 @@ silently erase tests that completed before it. The native runtime has no third-p
 For unchanged pytest semantics, use `testenix pytest`. That bridge intentionally delegates to
 pytest instead of silently approximating fixtures, markers, plugins, or hook behavior.
 
+For supported pytest and unittest modules, `testenix migrate` provides a conservative path to the
+native engine. Differential validation is part of that command; a syntactically successful rewrite
+alone is never treated as a completed migration.
+
 The trade-off is ecosystem maturity. pytest currently has much broader plugin, IDE, assertion
 rewriting, and migration support. Testenix should only claim to be better for the guarantees above
 until the adoption work in the roadmap is complete and measured on real projects.
@@ -206,6 +253,16 @@ empty tests across 16 modules in a median 8.04 seconds, compared with 25.33 seco
 21.30 seconds for pytest-xdist. That is 3.15x the throughput of pytest for this specific workload,
 not a universal performance promise. The result includes one warm-up and five measured,
 counterbalanced rounds. It does not describe `testenix pytest`, which executes through pytest.
+
+The separate safe-migration benchmark used 3,000 tests across 64 modules and four native workers.
+After conversion, pytest no-op tests ran in 0.636 seconds versus 2.070 seconds through sequential
+pytest (3.26x faster). The result reverses for empty unittest methods: native wrappers took 1.388
+seconds versus 0.223 seconds through a sequential stdlib-based outcome probe (6.23x slower). Adding 1 ms of
+synthetic work per unittest method changed the medians to 2.451 versus 4.106 seconds (1.68x
+faster). Migration itself was a one-time 6.29–19.69-second validation-and-publication transaction
+and is not included in those recurring-run medians. These synthetic comparisons depend on module
+layout, test duration, and worker count; they do not establish a universal advantage over pytest,
+pytest-xdist, unittest, or real project suites.
 
 See the [generated results and chart](https://polishdataengineer.github.io/testenix/benchmarks/results/),
 [raw JSON](https://github.com/polishdataengineer/testenix/tree/main/benchmarks),
@@ -236,6 +293,12 @@ See the [generated results and chart](https://polishdataengineer.github.io/teste
   itself.
 - The pytest bridge does not translate delegated outcomes into Testenix `RunResult`, JSON, history,
   retry, timeout, or scheduling semantics. Use pytest's own flags and installed plugins in that mode.
+- Native migration requires a green source baseline and a new output directory. Filesystem changes
+  inside the project are isolated by disposable copies during validation, but network, database,
+  cloud, and other external test side effects are not sandboxed.
+- A normal module is one scheduler-affinity unit. Converting 3,000 tests in one module does not
+  create 3,000 parallel units; spread independent tests across modules and measure the generated
+  suite before making a project-specific speed claim.
 - Test impact analysis, result caching, remote workers, and deep pytest-result aggregation are not
   part of version 0.1.
 

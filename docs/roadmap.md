@@ -10,6 +10,9 @@
 - Immutable attempts and lossless setup/call/teardown aggregation.
 - Console, JSON, JUnit XML, JSONL events, and SQLite duration history.
 - Optional `testenix pytest` compatibility bridge preserving the real pytest engine and plugins.
+- Safe native migration for a conservative pytest subset and direct unittest TestCase classes,
+  with source fingerprints, disposable validation copies, serial/parallel parity, and atomic
+  create-only publication.
 
 ## 0.2 — fast feedback
 
@@ -21,7 +24,8 @@
 ## 0.3 — adoption
 
 - Pytest hook adapter translating collection and outcomes into Testenix events and `RunResult`.
-- A migration checker and automated transformations for common fixtures and markers.
+- Expand migration beyond the v0.1 static subset only when new transformations have differential
+  semantics tests on real projects.
 - Versioned reporter and selector plugin interfaces.
 - IDE protocol and machine-readable collection manifest.
 

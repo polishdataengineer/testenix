@@ -27,6 +27,12 @@ BASELINES = (
     ROOT / "benchmarks" / "baseline_100k.json",
 )
 
+MIGRATION_BASELINES = (
+    ROOT / "benchmarks" / "migration_baseline_pytest_3000.json",
+    ROOT / "benchmarks" / "migration_baseline_unittest_3000.json",
+    ROOT / "benchmarks" / "migration_baseline_unittest_3000_delay_1ms.json",
+)
+
 LLM_DOCUMENTS = (
     ("Overview", Path("docs/index.md"), ""),
     ("Getting started", Path("docs/getting-started.md"), "getting-started/"),
@@ -35,6 +41,7 @@ LLM_DOCUMENTS = (
         Path("docs/guides/pytest-compatibility.md"),
         "guides/pytest-compatibility/",
     ),
+    ("Safe migration", Path("docs/guides/migration.md"), "guides/migration/"),
     ("Writing tests", Path("docs/guides/writing-tests.md"), "guides/writing-tests/"),
     ("Fixtures", Path("docs/guides/fixtures.md"), "guides/fixtures/"),
     ("Parallel execution", Path("docs/guides/parallelism.md"), "guides/parallelism/"),
@@ -95,6 +102,35 @@ class Benchmark:
         return float(self.measurements["pytest_xdist"]["median"]) / float(self.testenix["median"])
 
 
+@dataclass(frozen=True, slots=True)
+class MigrationBenchmark:
+    source: Path
+    framework: str
+    test_count: int
+    module_count: int
+    workers: int
+    delay_ms: float
+    repeats: int
+    warmups: int
+    environment: dict[str, Any]
+    source_measurement: dict[str, Any]
+    native_measurement: dict[str, Any]
+    migration_seconds: float
+    originals_modified: bool
+    provenance: dict[str, Any]
+    recorded_at: str
+
+    @property
+    def ratio(self) -> float:
+        return float(self.source_measurement["median_seconds"]) / float(
+            self.native_measurement["median_seconds"]
+        )
+
+    @property
+    def workload(self) -> str:
+        return "no-op" if self.delay_ms == 0 else f"{self.delay_ms:g} ms body"
+
+
 def _load_benchmark(path: Path) -> Benchmark:
     data = json.loads(path.read_text(encoding="utf-8"))
     scenario = data["scenario"]
@@ -132,16 +168,178 @@ def _load_benchmark(path: Path) -> Benchmark:
     )
 
 
+def _load_migration_benchmark(path: Path) -> MigrationBenchmark:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    scenario = data["scenario"]
+    measurements = data["measurements"]
+    framework = str(scenario["framework"])
+    source_name = f"source_{framework}"
+    source_measurement = dict(measurements[source_name])
+    native_measurement = dict(measurements["testenix_native"])
+    repeats = int(scenario["repeats"])
+    for name, measurement in (
+        (source_name, source_measurement),
+        ("testenix_native", native_measurement),
+    ):
+        samples = measurement.get("samples_seconds")
+        if not isinstance(samples, list) or len(samples) != repeats:
+            raise ValueError(f"{path}: invalid sample count for {name}")
+        if any(float(sample) <= 0 for sample in samples):
+            raise ValueError(f"{path}: non-positive duration for {name}")
+    migration = data["migration"]
+    migration_report = migration["report"]
+    provenance = dict(data.get("provenance", {}))
+    test_count = int(scenario["generated_test_count"])
+    if (
+        data.get("originals_modified") is not False
+        or migration_report.get("originals_modified") is not False
+        or migration_report.get("status") != "published"
+        or migration_report.get("converted_tests") != test_count
+    ):
+        raise ValueError(f"{path}: migration integrity gates did not pass")
+    if provenance.get("dirty") is not False or not provenance.get("commit"):
+        raise ValueError(f"{path}: migration baseline must come from a clean source commit")
+    recorded_at = data.get("recorded_at")
+    if not isinstance(recorded_at, str) or not recorded_at:
+        raise ValueError(f"{path}: migration baseline has no recording timestamp")
+    return MigrationBenchmark(
+        source=path,
+        framework=framework,
+        test_count=test_count,
+        module_count=int(scenario["generated_module_count"]),
+        workers=int(scenario["workers"]),
+        delay_ms=float(scenario.get("delay_ms", 0.0)),
+        repeats=repeats,
+        warmups=int(scenario["warmups"]),
+        environment=dict(data["environment"]),
+        source_measurement=source_measurement,
+        native_measurement=native_measurement,
+        migration_seconds=float(migration["wall_seconds"]),
+        originals_modified=False,
+        provenance=provenance,
+        recorded_at=recorded_at,
+    )
+
+
 def _seconds(value: Any) -> str:
     return f"{float(value):.3f} s"
 
 
-def _raw_link(benchmark: Benchmark) -> str:
+def _raw_link(benchmark: Benchmark | MigrationBenchmark) -> str:
     relative = benchmark.source.relative_to(ROOT).as_posix()
     return f"{REPOSITORY_URL}/blob/main/{relative}"
 
 
-def _render_benchmark_results(benchmarks: tuple[Benchmark, ...]) -> str:
+def _migration_comparison(benchmark: MigrationBenchmark) -> str:
+    if benchmark.ratio >= 1:
+        return f"{benchmark.ratio:.2f}× faster"
+    return f"{1 / benchmark.ratio:.2f}× slower"
+
+
+def _render_migration_results(benchmarks: tuple[MigrationBenchmark, ...]) -> str:
+    rows = []
+    detail_sections = []
+    for benchmark in benchmarks:
+        source = benchmark.source_measurement
+        native = benchmark.native_measurement
+        source_name = (
+            "pytest (sequential)"
+            if benchmark.framework == "pytest"
+            else ("unittest outcome probe (sequential)")
+        )
+        rows.append(
+            "| "
+            + " | ".join(
+                (
+                    source_name,
+                    benchmark.workload,
+                    f"{benchmark.test_count:,} / {benchmark.module_count:,}",
+                    _seconds(source["median_seconds"]),
+                    _seconds(native["median_seconds"]),
+                    _migration_comparison(benchmark),
+                    _seconds(benchmark.migration_seconds),
+                )
+            )
+            + " |"
+        )
+        source_samples = ", ".join(f"{float(value):.3f}" for value in source["samples_seconds"])
+        native_samples = ", ".join(f"{float(value):.3f}" for value in native["samples_seconds"])
+        native_range = (
+            f"{_seconds(native['minimum_seconds'])}–{_seconds(native['maximum_seconds'])}"
+        )
+        versions = ", ".join(
+            f"{name}={value}"
+            for name, value in sorted(benchmark.provenance.get("versions", {}).items())
+        )
+        environment_fields = ", ".join(
+            f"{name}={value}" for name, value in sorted(benchmark.environment.items())
+        )
+        commit = str(benchmark.provenance["commit"])
+        detail_sections.append(
+            f"""### {benchmark.framework} / {benchmark.workload}
+
+- Source command: `{source["command"]}`
+- Native command: `{native["command"]}`
+- Source median: {_seconds(source["median_seconds"])}
+- Source range: {_seconds(source["minimum_seconds"])}–{_seconds(source["maximum_seconds"])};
+  standard deviation: {_seconds(source["stdev_seconds"])}
+- Source raw samples: {source_samples} seconds
+- Native Testenix median: {_seconds(native["median_seconds"])}
+- Native Testenix range: {native_range};
+  standard deviation: {_seconds(native["stdev_seconds"])}
+- Native Testenix raw samples: {native_samples} seconds
+- Native workers: {benchmark.workers}
+- Measured rounds: {benchmark.repeats}; warmups: {benchmark.warmups}
+- One-time copy, validation, and publication transaction: {_seconds(benchmark.migration_seconds)}
+- Integrity gates: {benchmark.test_count:,} converted tests, matching source/native outcomes,
+  original SHA-256 values unchanged
+- Recorded at: `{benchmark.recorded_at}`
+- Source commit: [`{commit}`]({REPOSITORY_URL}/commit/{commit}); worktree clean
+- Lock SHA-256: `{benchmark.provenance.get("lock_sha256", "unknown")}`
+- Versions: {versions}
+- Environment: {environment_fields}
+- [Raw JSON]({_raw_link(benchmark)})
+"""
+        )
+
+    environment = benchmarks[0].environment
+    if any(benchmark.environment != environment for benchmark in benchmarks[1:]):
+        raise ValueError("published migration baselines do not share one environment")
+    table_header = (
+        "| Source runner | Workload | Tests / modules | Source median | Native median "
+        "| Native vs source | Migration transaction |"
+    )
+
+    return f"""## Migrated-suite measurements
+
+These separate measurements start with generated pytest or unittest sources, complete one safe
+copy-and-validate migration, and then compare recurring source-suite runs with recurring native
+Testenix runs. The migration transaction is a one-time cost shown separately; it is not included
+in either execution median.
+
+{table_header}
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+{chr(10).join(rows)}
+
+The native side used four workers. The source pytest and unittest outcome-probe baselines were
+sequential, so these rows do not compare Testenix with pytest-xdist or another parallel unittest
+runner. The unittest probe uses the standard-library loader and result semantics, then serializes
+per-test outcomes for parity checking; its timing therefore includes that small audit overhead.
+The no-op unittest wrappers are 6.23× slower than the probe because wrapper, loading, and
+result-adaptation costs dominate an empty body. With 1 ms of synthetic work per unittest method,
+parallel native execution is 1.68× faster in this 64-module layout. Module count and duration are
+therefore material, and none of these synthetic rows predicts a specific real project.
+
+### Raw migration samples and variance
+
+{chr(10).join(detail_sections)}
+"""
+
+
+def _render_benchmark_results(
+    benchmarks: tuple[Benchmark, ...],
+    migration_benchmarks: tuple[MigrationBenchmark, ...],
+) -> str:
     rows = []
     detail_sections = []
     for benchmark in benchmarks:
@@ -162,7 +360,7 @@ def _render_benchmark_results(benchmarks: tuple[Benchmark, ...]) -> str:
             )
             + " |"
         )
-        runner_details = []
+        runner_details: list[str] = []
         for display_name, measurement in (
             ("Testenix", testenix),
             ("pytest", pytest),
@@ -264,6 +462,8 @@ scenario.
 
 """
         + "\n".join(detail_sections)
+        + "\n"
+        + _render_migration_results(migration_benchmarks)
         + """
 ## Interpretation
 
@@ -286,6 +486,15 @@ $ uv sync --locked --dev --no-editable
 $ uv run python benchmarks/run_benchmark.py --tests 10000 --workers 4 --repeats 5
 $ uv run python benchmarks/run_benchmark.py --tests 10000 --workers 4 --repeats 5 --uneven
 $ uv run python benchmarks/run_benchmark.py --tests 100000 --workers 4 --repeats 5
+$ uv run python benchmarks/run_migration_benchmark.py --framework pytest --tests 3000 \\
+    --modules 64 --workers 4 --warmups 1 --repeats 5 \\
+    --output benchmarks/migration_baseline_pytest_3000.json
+$ uv run python benchmarks/run_migration_benchmark.py --framework unittest --tests 3000 \\
+    --modules 64 --workers 4 --warmups 1 --repeats 5 \\
+    --output benchmarks/migration_baseline_unittest_3000.json
+$ uv run python benchmarks/run_migration_benchmark.py --framework unittest --tests 3000 \\
+    --modules 64 --workers 4 --delay-ms 1 --warmups 1 --repeats 5 \\
+    --output benchmarks/migration_baseline_unittest_3000_delay_1ms.json
 ```
 
 Review the [benchmarking contract](../benchmarking.md) before comparing or publishing new data.
@@ -470,6 +679,8 @@ Package index: https://pypi.org/project/testenix/
 - [Getting started]({SITE_URL}getting-started/): installation and the first run.
 - [Pytest compatibility]({SITE_URL}guides/pytest-compatibility/): run existing suites unchanged,
   compare capabilities, and choose a migration boundary.
+- [Safe migration]({SITE_URL}guides/migration/): convert supported pytest and unittest suites,
+  validate parity, preserve originals, and interpret migrated-suite benchmarks.
 - [Writing tests]({SITE_URL}guides/writing-tests/): tests, cases, tags, skips, xfail, and retries.
 - [Fixtures]({SITE_URL}guides/fixtures/): dependency graphs, cleanup, and scopes.
 - [Parallel execution]({SITE_URL}guides/parallelism/): workers, scheduling, crashes, and timeouts.
@@ -535,9 +746,10 @@ def _render_llms_full(generated: dict[Path, str]) -> str:
 
 def _outputs() -> dict[Path, str]:
     benchmarks = tuple(_load_benchmark(path) for path in BASELINES)
+    migration_benchmarks = tuple(_load_migration_benchmark(path) for path in MIGRATION_BASELINES)
     results_path = Path("docs/benchmarks/results.md")
     generated = {
-        results_path: _render_benchmark_results(benchmarks),
+        results_path: _render_benchmark_results(benchmarks, migration_benchmarks),
         Path("docs/_static/benchmark-speedup.svg"): _render_benchmark_svg(benchmarks),
     }
     llms_index = _render_llms_index()
@@ -554,7 +766,7 @@ def _outputs() -> dict[Path, str]:
 
 
 def _write_or_check(outputs: dict[Path, str], *, check: bool) -> int:
-    stale = []
+    stale: list[str] = []
     for relative, content in outputs.items():
         path = ROOT / relative
         normalized = content.rstrip() + "\n"
@@ -567,8 +779,8 @@ def _write_or_check(outputs: dict[Path, str], *, check: bool) -> int:
 
     if stale:
         print("Generated documentation assets are stale:", file=sys.stderr)
-        for path in stale:
-            print(f"  - {path}", file=sys.stderr)
+        for stale_path in stale:
+            print(f"  - {stale_path}", file=sys.stderr)
         print("Run: python scripts/generate_docs_assets.py", file=sys.stderr)
         return 1
     if not check:

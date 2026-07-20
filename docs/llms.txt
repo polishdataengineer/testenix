@@ -13,6 +13,8 @@ Package index: https://pypi.org/project/testenix/
 - [Getting started](https://polishdataengineer.github.io/testenix/getting-started/): installation and the first run.
 - [Pytest compatibility](https://polishdataengineer.github.io/testenix/guides/pytest-compatibility/): run existing suites unchanged,
   compare capabilities, and choose a migration boundary.
+- [Safe migration](https://polishdataengineer.github.io/testenix/guides/migration/): convert supported pytest and unittest suites,
+  validate parity, preserve originals, and interpret migrated-suite benchmarks.
 - [Writing tests](https://polishdataengineer.github.io/testenix/guides/writing-tests/): tests, cases, tags, skips, xfail, and retries.
 - [Fixtures](https://polishdataengineer.github.io/testenix/guides/fixtures/): dependency graphs, cleanup, and scopes.
 - [Parallel execution](https://polishdataengineer.github.io/testenix/guides/parallelism/): workers, scheduling, crashes, and timeouts.

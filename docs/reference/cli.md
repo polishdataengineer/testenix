@@ -6,6 +6,7 @@
 testenix [-h] [--version]
 testenix [--config PYPROJECT] run [RUN_ARGS ...]
 testenix pytest [PYTEST_ARGS ...]
+testenix migrate FRAMEWORK PATH [PATH ...] [MIGRATION_ARGS ...]
 ```
 
 | Option | Description |
@@ -69,6 +70,35 @@ instead. In particular, `testenix --config PATH pytest ...` is rejected; `pytest
 follow `testenix`. See [pytest compatibility](../guides/pytest-compatibility.md) for the full
 boundary.
 
+## `testenix migrate`
+
+```text
+testenix migrate {auto,pytest,unittest} PATH [PATH ...]
+                 [-o OUTPUT]
+                 [-w auto|N]
+                 [--validation-timeout SECONDS]
+                 [--dry-run | --check]
+                 [--report-json FILE|-]
+```
+
+| Argument | Default | Description |
+| --- | --- | --- |
+| `FRAMEWORK` | required | `pytest`, `unittest`, or `auto` for separate modules of both kinds. |
+| `PATH ...` | required | Source files or directories. Sources are never modified. |
+| `-o`, `--output` | `testenix_migrated` | New directory to publish; it must not exist. |
+| `-w`, `--workers` | `auto` | Worker count for parallel candidate validation; an integer must be at least `2`. |
+| `--validation-timeout` | `300` | Independent deadline for each source/native subprocess. |
+| `--dry-run` | off | Static analysis and source-hash check only; run and publish nothing. |
+| `--check` | off | Full differential validation, with no published output. |
+| `--report-json` | none | New audit path inside the project and outside source/output suites, or `-` for clean JSON on standard output. |
+
+Without `--dry-run` or `--check`, migration requires a green source baseline, an equal native
+serial result, and an equal native parallel result, including every mapped test outcome. It then rechecks source hashes and atomically
+renames a complete staging directory to the new output without replacement. A failure before that
+rename leaves the output absent. A report-only failure after publication warns but leaves the
+validated output and successful exit status intact. See [safe migration](../guides/migration.md) for supported constructs, unittest's
+SHA-pinned wrapper model, rollback guarantees, and external-side-effect boundaries.
+
 ## Examples
 
 ```console
@@ -79,6 +109,9 @@ $ testenix run --retries 1 --timeout 10
 $ testenix run --json reports/run.json --junit reports/junit.xml
 $ testenix --config config/pyproject.toml run
 $ testenix pytest -q tests
+$ testenix migrate pytest tests --dry-run
+$ testenix migrate auto tests --check --report-json reports/migration.json
+$ testenix migrate unittest tests --output tests_testenix
 ```
 
 ## Exit codes
@@ -91,6 +124,17 @@ The native `testenix run` command uses these codes:
 | `1` | A test failed, errored, timed out, crashed, became flaky, or unexpectedly passed. |
 | `2` | Invalid CLI/configuration, collection error, or empty explicit tag selection. |
 | `3` | Internal runner, reporter, or history failure. |
+| `130` | User interruption. |
+
+The `testenix migrate` command uses these codes:
+
+| Code | Meaning |
+| ---: | --- |
+| `0` | Analysis, check, or publication succeeded; also retained after a report-only failure following publication. |
+| `1` | Source/candidate execution failed, timed out, or differed. |
+| `2` | Unsafe path, existing output, source drift, or invalid migration usage. |
+| `3` | Internal process or report failure before publication. |
+| `4` | An unsupported construct was found; nothing was published. |
 | `130` | User interruption. |
 
 `testenix pytest` hands the current CLI process to pytest, so pytest or plugin exit statuses are

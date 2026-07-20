@@ -53,11 +53,23 @@ jobs:
       - name: Verify pytest extra from wheel
         shell: bash
         run: |
-          wheel_path="$(find dist -maxdepth 1 -type f -name '*.whl' -print -quit)"
+          wheel_path="$(realpath "$(find dist -maxdepth 1 -type f -name '*.whl' -print -quit)")"
           uv run --isolated --no-project --with "testenix[pytest] @ $wheel_path" testenix pytest --version
           uv run --isolated --no-project --with "testenix[pytest] @ $wheel_path" --with "pytest==8.3.0" testenix pytest --version
+          uv run --isolated --no-project --with "testenix[pytest] @ $wheel_path" testenix migrate pytest examples/migration_pytest/tests --output .testenix-release-pytest --workers 2
+          uv run --isolated --no-project --with "$wheel_path" testenix run .testenix-release-pytest --no-history
+          uv run --isolated --no-project --with "$wheel_path" testenix migrate unittest examples/migration_unittest/tests --output .testenix-release-unittest --workers 2
+          outside="$(mktemp -d)"
+          cd "$outside"
+          uv run --isolated --no-project --with "$wheel_path" testenix run "$GITHUB_WORKSPACE/.testenix-release-unittest" --no-history
       - run: uv run --isolated --no-project --with ./dist/testenix-*.tar.gz testenix --version
       - run: uv run --isolated --no-project --with ./dist/testenix-*.tar.gz testenix run examples/basic --no-history
+      - name: Verify migration commands from sdist
+        shell: bash
+        run: |
+          sdist_path="$(realpath "$(find dist -maxdepth 1 -type f -name '*.tar.gz' -print -quit)")"
+          uv run --isolated --no-project --with "testenix[pytest] @ $sdist_path" testenix migrate pytest examples/migration_pytest/tests --check --output .testenix-release-sdist-pytest --workers 2
+          uv run --isolated --no-project --with "$sdist_path" testenix migrate unittest examples/migration_unittest/tests --check --output .testenix-release-sdist-unittest --workers 2
       - name: Store distributions
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

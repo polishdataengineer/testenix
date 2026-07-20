@@ -7,6 +7,13 @@ from testenix.config import TestenixConfig
 from testenix.contracts import Event, RunResult, Scope, Status, TestResult, TestSpec
 from testenix.discovery import CollectionResult, discover
 from testenix.events import EventSink
+from testenix.migration_service import (
+    MigrationOptions,
+    MigrationReport,
+    MigrationStatus,
+    ValidationSummary,
+    migrate,
+)
 from testenix.runner import run, run_async
 
 __all__ = [
@@ -14,16 +21,21 @@ __all__ = [
     "CollectionResult",
     "Event",
     "EventSink",
+    "MigrationOptions",
+    "MigrationReport",
+    "MigrationStatus",
     "TestenixConfig",
     "RunResult",
     "Scope",
     "Status",
     "TestResult",
     "TestSpec",
+    "ValidationSummary",
     "case",
     "cases",
     "discover",
     "fixture",
+    "migrate",
     "run",
     "run_async",
     "skip",
