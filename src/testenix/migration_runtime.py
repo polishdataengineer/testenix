@@ -14,19 +14,29 @@ import json
 import re
 import threading
 import unittest
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
-from types import ModuleType, TracebackType
+from types import MappingProxyType, ModuleType, TracebackType
 from typing import TypeAlias
 
 from testenix.discovery import load_module
 
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 _MODULE_CACHE: dict[tuple[str, str], ModuleType] = {}
-_MANIFEST_CACHE: dict[tuple[str, str, str], Path] = {}
 _MODULE_CACHE_LOCK = threading.RLock()
 
 ExceptionInfo: TypeAlias = tuple[type[BaseException], BaseException, TracebackType]
 RawExceptionInfo: TypeAlias = ExceptionInfo | tuple[None, None, None]
+
+
+@dataclass(frozen=True, slots=True)
+class _ManifestCacheEntry:
+    project_root: Path
+    source_hashes: Mapping[Path, str]
+
+
+_MANIFEST_CACHE: dict[tuple[str, str], _ManifestCacheEntry] = {}
 
 
 class UnittestMigrationRuntimeError(RuntimeError):
@@ -134,6 +144,36 @@ def _verified_source(source_path: str | Path, expected_sha256: str) -> tuple[Pat
     return path, normalized_digest
 
 
+def _verified_manifest(
+    manifest_path: str | Path,
+    expected_sha256: str,
+) -> tuple[Path, str, bytes]:
+    """Verify a text manifest while treating JSON line endings as insignificant.
+
+    Generated artifacts may pass through a Windows text writer or a Git checkout
+    which converts LF to CRLF.  That does not change the JSON document, so only
+    the manifest digest normalizes line endings.  Original Python sources remain
+    byte-for-byte pinned by :func:`_verified_source`.  The canonical bytes are
+    returned so the caller parses the verified snapshot without reopening the
+    path.
+    """
+
+    normalized_digest = expected_sha256.lower()
+    if _SHA256_PATTERN.fullmatch(normalized_digest) is None:
+        raise ValueError("manifest_sha256 must be a 64-character hexadecimal SHA-256 digest")
+
+    path = Path(manifest_path).expanduser().resolve()
+    if not path.is_file():
+        raise UnittestSourceChangedError(f"unittest source manifest does not exist: {path}")
+    content = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    actual_digest = hashlib.sha256(content).hexdigest()
+    if actual_digest != normalized_digest:
+        raise UnittestSourceChangedError(
+            f"unittest source manifest changed since migration: {path}; rerun 'testenix migrate'"
+        )
+    return path, normalized_digest, content
+
+
 def resolve_unittest_source(
     wrapper_path: str | Path,
     source_relative_to_wrapper: str | Path,
@@ -158,7 +198,7 @@ def resolve_unittest_source(
         raise ValueError("source_relative_to_wrapper must be a non-empty relative path")
     candidate = wrapper.parent.joinpath(*relative.parts)
     try:
-        verified, _ = _verified_source(candidate, expected_sha256)
+        verified, normalized_source_digest = _verified_source(candidate, expected_sha256)
     except (OSError, RuntimeError) as error:
         raise UnittestSourceChangedError(
             "cannot locate the pinned unittest source through the generated wrapper; "
@@ -191,18 +231,37 @@ def resolve_unittest_source(
         or any(part in {"", "."} for part in manifest_relative.parts)
     ):
         raise ValueError("manifest_relative_to_wrapper must be a non-empty relative path")
-    manifest_path, normalized_manifest_digest = _verified_source(
+    manifest_path, normalized_manifest_digest, manifest_content = _verified_manifest(
         wrapper.parent.joinpath(*manifest_relative.parts),
         manifest_sha256,
     )
-    cache_key = (str(manifest_path), normalized_manifest_digest, str(project_root))
+    cache_key = (str(manifest_path), normalized_manifest_digest)
     with _MODULE_CACHE_LOCK:
-        cached_root = _MANIFEST_CACHE.get(cache_key)
-        if cached_root is None:
-            _verify_source_manifest(manifest_path, project_root, project_relative, expected_sha256)
-            _MANIFEST_CACHE[cache_key] = project_root
-        elif cached_root != project_root:
+        cached_manifest = _MANIFEST_CACHE.get(cache_key)
+        cache_hit = cached_manifest is not None
+        if cached_manifest is None:
+            source_hashes = _verify_source_manifest(
+                manifest_path,
+                manifest_content,
+                project_root,
+            )
+            cached_manifest = _ManifestCacheEntry(project_root, source_hashes)
+            _MANIFEST_CACHE[cache_key] = cached_manifest
+        elif cached_manifest.project_root != project_root:
             raise UnittestSourceChangedError("unittest source manifest resolved ambiguously")
+    if cache_hit:
+        # Filesystem integrity cannot be cached: helpers may change while this
+        # process remains alive.  This scan happens once per generated source
+        # module import, not once per converted unittest method.
+        _verify_manifest_source_hashes(
+            cached_manifest.source_hashes,
+            cached_manifest.project_root,
+        )
+    _verify_manifest_membership(
+        cached_manifest.source_hashes,
+        project_relative,
+        normalized_source_digest,
+    )
     return verified
 
 
@@ -222,12 +281,11 @@ def _safe_manifest_relative_path(value: str | Path, *, description: str) -> Path
 
 def _verify_source_manifest(
     manifest_path: Path,
+    manifest_content: bytes,
     project_root: Path,
-    requested_source: Path,
-    expected_source_sha256: str,
-) -> None:
+) -> Mapping[Path, str]:
     try:
-        document = json.loads(manifest_path.read_text(encoding="utf-8"))
+        document = json.loads(manifest_content)
         if (
             document.get("format") != "testenix.unittest-source-manifest"
             or document.get("schema_version") != 1
@@ -253,10 +311,15 @@ def _verify_source_manifest(
             )
         source_hashes[relative] = digest
 
-    if source_hashes.get(requested_source) != expected_source_sha256.lower():
-        raise UnittestSourceChangedError(
-            f"unittest source manifest does not pin {requested_source.as_posix()}"
-        )
+    immutable_hashes = MappingProxyType(source_hashes)
+    _verify_manifest_source_hashes(immutable_hashes, project_root)
+    return immutable_hashes
+
+
+def _verify_manifest_source_hashes(
+    source_hashes: Mapping[Path, str],
+    project_root: Path,
+) -> None:
     for relative, digest in source_hashes.items():
         candidate, _ = _verified_source(project_root.joinpath(*relative.parts), digest)
         try:
@@ -265,6 +328,17 @@ def _verify_source_manifest(
             raise UnittestSourceChangedError(
                 f"unittest source path escapes the project root: {relative.as_posix()}"
             ) from error
+
+
+def _verify_manifest_membership(
+    source_hashes: Mapping[Path, str],
+    requested_source: Path,
+    expected_source_sha256: str,
+) -> None:
+    if source_hashes.get(requested_source) != expected_source_sha256:
+        raise UnittestSourceChangedError(
+            f"unittest source manifest does not pin {requested_source.as_posix()}"
+        )
 
 
 def load_unittest_case(

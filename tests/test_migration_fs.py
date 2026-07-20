@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import testenix.migration_fs as migration_fs
 from testenix.migration_fs import (
     AtomicPublishError,
     MigrationPaths,
@@ -56,6 +57,33 @@ def _symlink_or_skip(target: Path | str, link: Path, *, directory: bool = False)
         pytest.skip(f"symbolic links are unavailable: {error}")
 
 
+def _remove_retained_test_transaction(staging: PublishStaging, tmp_path: Path) -> None:
+    """Remove a retained transaction only from pytest's disposable directory."""
+
+    transaction = staging.parent.resolve(strict=True)
+    sandbox = tmp_path.resolve(strict=True)
+    try:
+        transaction.relative_to(sandbox)
+    except ValueError as error:
+        raise AssertionError(f"refusing test cleanup outside {sandbox}: {transaction}") from error
+    shutil.rmtree(transaction)
+
+
+def _cleanup_staging_for_test(
+    staging: PublishStaging,
+    paths: MigrationPaths,
+    tmp_path: Path,
+) -> None:
+    """Honor fail-closed retention, then clean only pytest-owned scratch data."""
+
+    try:
+        cleanup_publish_staging(staging, paths)
+    except UnsafeMigrationPathError as error:
+        if "automatic recursive staging cleanup is unavailable" not in str(error):
+            raise
+        _remove_retained_test_transaction(staging, tmp_path)
+
+
 @pytest.fixture
 def staged_payload(tmp_path: Path) -> Iterator[tuple[MigrationPaths, PublishStaging]]:
     paths = _paths(tmp_path)
@@ -63,7 +91,7 @@ def staged_payload(tmp_path: Path) -> Iterator[tuple[MigrationPaths, PublishStag
     try:
         yield paths, staging
     finally:
-        cleanup_publish_staging(staging, paths)
+        _cleanup_staging_for_test(staging, paths, tmp_path)
 
 
 def test_validate_returns_canonical_project_source_and_output(tmp_path: Path) -> None:
@@ -556,7 +584,31 @@ def test_atomic_publish_race_never_replaces_existing_output(tmp_path: Path) -> N
         assert sentinel.read_text(encoding="utf-8") == "keep"
         assert (staging / "test_native.py").is_file()
     finally:
-        cleanup_publish_staging(staging, paths)
+        _cleanup_staging_for_test(staging, paths, tmp_path)
+
+
+def test_cleanup_retains_nonempty_staging_without_safe_recursive_api(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(migration_fs, "_SECURE_DIR_FD_AVAILABLE", False)
+    paths = _paths(tmp_path)
+    staging = create_publish_staging(paths, transaction_id="retain-nonempty")
+    transaction = staging.parent
+    generated = staging / "nested" / "test_native.py"
+    write_staged_artifacts(staging, (_artifact("nested/test_native.py"),))
+
+    try:
+        with pytest.raises(
+            UnsafeMigrationPathError,
+            match="automatic recursive staging cleanup is unavailable",
+        ):
+            cleanup_publish_staging(staging, paths)
+
+        assert transaction.is_dir()
+        assert generated.read_text(encoding="utf-8") == "VALUE = 1\n"
+    finally:
+        _remove_retained_test_transaction(staging, tmp_path)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX directory fsync regression")

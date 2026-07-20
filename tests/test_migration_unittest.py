@@ -14,6 +14,7 @@ from testenix.migration_models import ConversionBundle, SourceFile
 from testenix.migration_runtime import (
     UnittestSourceChangedError,
     load_unittest_case,
+    resolve_unittest_source,
 )
 from testenix.migration_unittest import (
     convert_unittest_suite,
@@ -292,6 +293,213 @@ def test_generated_wrapper_resolves_original_from_an_unrelated_working_directory
     assert not result.collection_issues
     assert [test.status for test in result.tests] == [Status.PASS]
     assert source.path.read_bytes() == original
+
+
+def test_generated_wrapper_accepts_crlf_manifest_but_rejects_content_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, original = _source_file(
+        tmp_path,
+        """
+        import unittest
+
+        class TestWindowsManifest(unittest.TestCase):
+            def test_value(self):
+                self.assertEqual(6 * 7, 42)
+        """,
+    )
+    bundle = convert_unittest_suite((source,))
+    generated = _write_generated(tmp_path, bundle)
+    manifest = generated / ".testenix-unittest-sources.json"
+    lf_content = manifest.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    crlf_content = lf_content.replace(b"\n", b"\r\n")
+    manifest.write_bytes(crlf_content)
+    monkeypatch.chdir(tmp_path)
+
+    accepted = run(
+        (str(generated.relative_to(tmp_path)),),
+        TestenixConfig(workers=1, retries=0, history_path=None),
+    )
+    manifest.write_bytes(crlf_content.replace(b'"schema_version": 1', b'"schema_version": 2'))
+    rejected = run(
+        (str(generated.relative_to(tmp_path)),),
+        TestenixConfig(workers=1, retries=0, history_path=None),
+    )
+
+    assert [test.status for test in accepted.tests] == [Status.PASS]
+    assert not accepted.collection_issues
+    assert rejected.exit_code == 2
+    assert rejected.collection_issues
+    assert "source manifest changed since migration" in rejected.collection_issues[0].message
+    assert source.path.read_bytes() == original
+
+
+def test_manifest_is_parsed_from_the_single_verified_byte_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, _ = _source_file(
+        tmp_path,
+        """
+        import unittest
+
+        class TestManifestSnapshot(unittest.TestCase):
+            def test_value(self):
+                self.assertTrue(True)
+        """,
+    )
+    bundle = convert_unittest_suite((source,))
+    generated = _write_generated(tmp_path, bundle)
+    wrapper = next(generated.rglob("test_*.py"))
+    manifest = generated / ".testenix-unittest-sources.json"
+    manifest_content = manifest.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    manifest_sha256 = hashlib.sha256(manifest_content).hexdigest()
+    original_read_bytes = Path.read_bytes
+    original_read_text = Path.read_text
+    read_count = 0
+
+    def read_manifest_once(path: Path) -> bytes:
+        nonlocal read_count
+        if path.resolve() == manifest.resolve():
+            read_count += 1
+            if read_count > 1:
+                raise AssertionError("manifest content was read more than once")
+        return original_read_bytes(path)
+
+    def reject_manifest_read_text(path: Path, *args: object, **kwargs: object) -> str:
+        del args, kwargs
+        if path.resolve() == manifest.resolve():
+            raise AssertionError("verified manifest path was reopened for parsing")
+        return original_read_text(path, encoding="utf-8")
+
+    monkeypatch.setattr(Path, "read_bytes", read_manifest_once)
+    monkeypatch.setattr(Path, "read_text", reject_manifest_read_text)
+
+    resolved = resolve_unittest_source(
+        wrapper,
+        Path("..") / source.project_relative,
+        source.sha256,
+        project_relative_source=source.project_relative,
+        manifest_relative_to_wrapper=manifest.relative_to(wrapper.parent),
+        manifest_sha256=manifest_sha256,
+    )
+
+    assert resolved == source.path.resolve()
+    assert read_count == 1
+
+
+def test_warm_manifest_cache_still_checks_requested_source_membership_and_digest(
+    tmp_path: Path,
+) -> None:
+    source_a, _ = _source_file(
+        tmp_path,
+        """
+        import unittest
+
+        class TestManifestA(unittest.TestCase):
+            def test_a(self):
+                self.assertTrue(True)
+        """,
+        filename="test_a.py",
+    )
+    source_b, _ = _source_file(
+        tmp_path,
+        """
+        import unittest
+
+        class TestManifestB(unittest.TestCase):
+            def test_b(self):
+                self.assertTrue(True)
+        """,
+        filename="test_b.py",
+    )
+    bundle = convert_unittest_suite((source_a,))
+    generated = _write_generated(tmp_path, bundle)
+    wrapper = generated / "test_a.py"
+    manifest = generated / ".testenix-unittest-sources.json"
+    manifest_content = manifest.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    manifest_sha256 = hashlib.sha256(manifest_content).hexdigest()
+
+    resolved_a = resolve_unittest_source(
+        wrapper,
+        Path("..") / source_a.project_relative,
+        source_a.sha256,
+        project_relative_source=source_a.project_relative,
+        manifest_relative_to_wrapper=manifest.relative_to(wrapper.parent),
+        manifest_sha256=manifest_sha256,
+    )
+
+    assert resolved_a == source_a.path.resolve()
+    with pytest.raises(UnittestSourceChangedError, match=r"does not pin legacy/test_b\.py"):
+        resolve_unittest_source(
+            wrapper,
+            Path("..") / source_b.project_relative,
+            source_b.sha256,
+            project_relative_source=source_b.project_relative,
+            manifest_relative_to_wrapper=manifest.relative_to(wrapper.parent),
+            manifest_sha256=manifest_sha256,
+        )
+
+    changed = source_a.path.read_bytes() + b"\n# changed after cache warmup\n"
+    source_a.path.write_bytes(changed)
+    with pytest.raises(UnittestSourceChangedError, match="source changed since migration"):
+        resolve_unittest_source(
+            wrapper,
+            Path("..") / source_a.project_relative,
+            hashlib.sha256(changed).hexdigest(),
+            project_relative_source=source_a.project_relative,
+            manifest_relative_to_wrapper=manifest.relative_to(wrapper.parent),
+            manifest_sha256=manifest_sha256,
+        )
+
+
+def test_warm_manifest_cache_rechecks_helper_hashes_in_the_same_process(
+    tmp_path: Path,
+) -> None:
+    helper, _ = _source_file(
+        tmp_path,
+        "VALUE = 42\n",
+        filename="helper.py",
+    )
+    source, _ = _source_file(
+        tmp_path,
+        """
+        import unittest
+        from helper import VALUE
+
+        class TestManifestHelper(unittest.TestCase):
+            def test_value(self):
+                self.assertEqual(VALUE, 42)
+        """,
+    )
+    bundle = convert_unittest_suite((source,), manifest_files=(source, helper))
+    generated = _write_generated(tmp_path, bundle)
+    wrapper = generated / "test_legacy.py"
+    manifest = generated / ".testenix-unittest-sources.json"
+    manifest_content = manifest.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    manifest_sha256 = hashlib.sha256(manifest_content).hexdigest()
+
+    resolved = resolve_unittest_source(
+        wrapper,
+        Path("..") / source.project_relative,
+        source.sha256,
+        project_relative_source=source.project_relative,
+        manifest_relative_to_wrapper=manifest.relative_to(wrapper.parent),
+        manifest_sha256=manifest_sha256,
+    )
+    helper.path.write_bytes(b"VALUE = 99\n")
+
+    assert resolved == source.path.resolve()
+    with pytest.raises(UnittestSourceChangedError, match="source changed since migration"):
+        resolve_unittest_source(
+            wrapper,
+            Path("..") / source.project_relative,
+            source.sha256,
+            project_relative_source=source.project_relative,
+            manifest_relative_to_wrapper=manifest.relative_to(wrapper.parent),
+            manifest_sha256=manifest_sha256,
+        )
 
 
 def test_generated_wrapper_rejects_drift_in_an_imported_python_helper(
