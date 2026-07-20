@@ -5,6 +5,13 @@ project intends to use Semantic Versioning once its public API reaches stability
 
 ## [Unreleased]
 
+### Added
+
+- `testenix pytest [PYTEST_ARGS ...]` compatibility bridge for unchanged pytest suites, preserving
+  the real pytest collector, fixtures, parametrization, markers, plugins, output, and exit status.
+- Optional `testenix[pytest]` installation extra and a documented native-versus-compatibility
+  capability matrix.
+
 ## [0.1.0] - 2026-07-20
 
 ### Added

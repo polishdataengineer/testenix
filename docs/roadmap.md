@@ -9,6 +9,7 @@
 - Local process workers with deterministic LPT scheduling.
 - Immutable attempts and lossless setup/call/teardown aggregation.
 - Console, JSON, JUnit XML, JSONL events, and SQLite duration history.
+- Optional `testenix pytest` compatibility bridge preserving the real pytest engine and plugins.
 
 ## 0.2 — fast feedback
 
@@ -19,7 +20,7 @@
 
 ## 0.3 — adoption
 
-- Optional pytest collection/execution adapter in a separate extra or distribution.
+- Pytest hook adapter translating collection and outcomes into Testenix events and `RunResult`.
 - A migration checker and automated transformations for common fixtures and markers.
 - Versioned reporter and selector plugin interfaces.
 - IDE protocol and machine-readable collection manifest.
@@ -33,4 +34,3 @@
 
 Result caching and impact selection will not become build-gating defaults until their false-negative
 rate is measured continuously against full-suite runs.
-

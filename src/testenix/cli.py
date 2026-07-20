@@ -34,7 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--config",
         dest="global_config",
         type=Path,
-        help="pyproject.toml containing [tool.testenix]",
+        help="pyproject.toml containing [tool.testenix] for the native run command",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -67,12 +67,26 @@ def build_parser() -> argparse.ArgumentParser:
     history_group.add_argument("--history", dest="history_path", type=Path, default=None)
     history_group.add_argument("--no-history", action="store_true")
     run_parser.set_defaults(handler=_run_command)
+
+    # Pytest owns the complete argument grammar for this compatibility command.
+    # ``main`` intercepts it before argparse so flags such as ``-q`` and ``-k``
+    # can pass through unchanged; this placeholder keeps top-level help useful.
+    pytest_parser = subparsers.add_parser(
+        "pytest",
+        add_help=False,
+        help="run an existing pytest suite through the compatibility adapter",
+    )
+    pytest_parser.set_defaults(handler=_misplaced_pytest_command)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    raw_arguments = tuple(sys.argv[1:] if argv is None else argv)
+    if raw_arguments[:1] == ("pytest",):
+        return _pytest_command(raw_arguments[1:])
+
     parser = build_parser()
-    arguments = parser.parse_args(argv)
+    arguments = parser.parse_args(raw_arguments)
     try:
         return int(arguments.handler(arguments))
     except ConfigError as error:
@@ -130,6 +144,40 @@ def _call_runner(paths: Sequence[str], config: TestenixConfig) -> RunResult:
     from testenix.runner import run
 
     return run(paths, config)
+
+
+def _pytest_command(arguments: Sequence[str]) -> int:
+    from testenix.pytest_adapter import PytestInvocationError, PytestUnavailableError
+
+    try:
+        return _call_pytest(tuple(arguments))
+    except KeyboardInterrupt:
+        print("testenix: interrupted", file=sys.stderr)
+        return EXIT_INTERRUPTED
+    except PytestUnavailableError as error:
+        print(f"testenix: {error}", file=sys.stderr)
+        return EXIT_USAGE
+    except PytestInvocationError as error:
+        print(f"testenix: {error}", file=sys.stderr)
+        return EXIT_INTERNAL_ERROR
+
+
+def _call_pytest(arguments: Sequence[str]) -> int:
+    # Kept behind this seam so the CLI contract can be tested without handing
+    # the current test process to pytest.
+    from testenix.pytest_adapter import run_pytest
+
+    return run_pytest(arguments)
+
+
+def _misplaced_pytest_command(arguments: argparse.Namespace) -> int:
+    del arguments
+    print(
+        "testenix: put 'pytest' immediately after 'testenix'; "
+        "Testenix --config applies only to the native run command",
+        file=sys.stderr,
+    )
+    return EXIT_USAGE
 
 
 def _worker_count(value: str) -> int | str:

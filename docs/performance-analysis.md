@@ -2,7 +2,7 @@
 
 ## Executive summary
 
-The optimized v0.1 runner is faster than pytest and pytest-xdist in the checked-in synthetic
+The optimized native v0.1 `testenix run` engine is faster than pytest and pytest-xdist in the checked-in synthetic
 large-suite scenarios. The largest recorded comparison is 100,000 passing tests across 16 modules:
 Testenix completed the suite in a median 8.038 seconds, pytest in 25.333 seconds, and pytest-xdist
 in 21.300 seconds. Every measured command had to report the expected test count or the harness
@@ -12,6 +12,10 @@ and Testenix's samples ranged from 7.912 to 8.096 seconds.
 This is evidence for the tested workload and machine, not a universal claim about every Python
 project. Import-heavy suites, fixture-heavy suites, slow tests, failure output, different operating
 systems, and real repositories still need independent measurements.
+
+These results do not apply to `testenix pytest`. The compatibility command delegates to pytest and
+has pytest execution performance plus launcher and adapter overhead, which has not yet been
+measured separately.
 
 ## Environment and method
 
@@ -34,7 +38,7 @@ Testenix, pytest, and pytest-xdist versions.
 
 ## Results
 
-| Scenario | pytest | pytest-xdist | Testenix | Testenix advantage |
+| Scenario | pytest | pytest-xdist | Native Testenix | Native Testenix advantage |
 |---|---:|---:|---:|---:|
 | 10,000 no-op tests, 16 modules | 2.477 s | 2.106 s | 0.869 s | 2.85x vs pytest |
 | 10,000 uneven tests, 16 modules | 3.076 s | 2.138 s | 1.345 s | 2.29x vs pytest |
@@ -144,4 +148,5 @@ Relevant upstream constraints are documented in the
 
 No universal “always faster than pytest” statement should be published until the real-project and
 cross-platform gates pass. The supported claim today is narrower: Testenix is materially faster in the
-measured large passing-suite scenarios while retaining supervised isolation and complete results.
+measured native large passing-suite scenarios while retaining supervised isolation and complete
+results.

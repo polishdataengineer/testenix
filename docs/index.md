@@ -8,11 +8,12 @@ description: Testenix is an async-native, parallel-first Python testing framewor
   <div class="testenix-kicker">Python testing framework · Alpha</div>
   <div class="testenix-title">Fast tests. Clear results.</div>
   <p>
-    Testenix unifies synchronous and asynchronous tests, fixtures, local parallelism,
-    retries, crash recovery, and machine-readable reports in one dependency-free runtime.
+    Testenix combines a dependency-free native runtime with a transparent bridge for
+    running existing pytest suites unchanged.
   </p>
   <div class="testenix-actions">
     <a href="getting-started/">Start testing</a>
+    <a href="guides/pytest-compatibility/">Run pytest suites</a>
     <a href="benchmarks/results/">See the benchmarks</a>
     <a href="for-llms/">Copy docs for an LLM</a>
   </div>
@@ -23,6 +24,7 @@ description: Testenix is an async-native, parallel-first Python testing framewor
 :maxdepth: 2
 
 getting-started
+guides/pytest-compatibility
 guides/writing-tests
 guides/fixtures
 guides/parallelism
@@ -41,10 +43,10 @@ for-llms
 ## Why Testenix
 
 <div class="metric-grid">
-  <div class="metric-card"><strong>0</strong><span>third-party runtime dependencies</span></div>
+  <div class="metric-card"><strong>0</strong><span>dependencies in the native runtime</span></div>
   <div class="metric-card"><strong>12</strong><span>Python and OS combinations in CI</span></div>
   <div class="metric-card"><strong>3</strong><span>console, JSON, and JUnit reports</span></div>
-  <div class="metric-card"><strong>3.15×</strong><span>100k synthetic throughput vs pytest</span></div>
+  <div class="metric-card"><strong>3.15×</strong><span>native <code>testenix run</code> on the 100k synthetic workload vs pytest</span></div>
 </div>
 
 Testenix is deliberately built around a few strong guarantees:
@@ -61,6 +63,17 @@ Testenix is deliberately built around a few strong guarantees:
   the same versioned result contracts.
 
 ## A complete first test
+
+Already have a pytest suite? Keep its fixtures, parametrization, markers, classes, configuration,
+and plugins:
+
+```console
+$ python -m pip install "testenix[pytest]"
+$ testenix pytest -q tests
+```
+
+[Read the compatibility contract](guides/pytest-compatibility/) before migrating individual
+modules to the native engine.
 
 ```python
 from collections.abc import AsyncIterator
@@ -94,9 +107,10 @@ If the first PyPI release is not available yet, install the current source with
 
 ## Performance evidence, with context
 
-The checked-in development baseline measured 100,000 empty tests across 16 generated modules on
-an Apple M4 Pro and CPython 3.11. Testenix completed that specific workload in a median 8.04
-seconds, compared with 25.33 seconds for pytest and 21.30 seconds for pytest-xdist.
+The checked-in development baseline measured native `testenix run` on 100,000 empty tests across
+16 generated modules on an Apple M4 Pro and CPython 3.11. Native Testenix completed that specific
+workload in a median 8.04 seconds, compared with 25.33 seconds for pytest and 21.30 seconds for
+pytest-xdist. These measurements do not apply to the delegated `testenix pytest` command.
 
 <div class="benchmark-caveat">
 This is a preliminary synthetic result from one machine, not a promise that every project will be
@@ -109,7 +123,9 @@ and limitations so that the claim can be evaluated rather than taken on trust.
 
 ## Project maturity
 
-Testenix is alpha software and is not yet a drop-in pytest replacement. Pytest has a much broader
-plugin ecosystem, richer IDE integration, and mature assertion rewriting. Testenix is a good fit
-when its native async model, built-in parallel execution, explicit failure semantics, or
-dependency-free runtime are more important than ecosystem compatibility.
+Testenix is alpha software. The `testenix pytest` bridge preserves an existing suite by delegating
+to real pytest, while `testenix run` is a distinct native engine rather than a drop-in pytest
+reimplementation. Pytest still has a much broader plugin ecosystem, richer IDE integration, and
+mature assertion rewriting. Choose the bridge for compatibility and the native engine when its
+async model, built-in parallel execution, explicit failure semantics, or dependency-free core are
+more important.

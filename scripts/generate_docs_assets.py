@@ -30,6 +30,11 @@ BASELINES = (
 LLM_DOCUMENTS = (
     ("Overview", Path("docs/index.md"), ""),
     ("Getting started", Path("docs/getting-started.md"), "getting-started/"),
+    (
+        "Pytest compatibility",
+        Path("docs/guides/pytest-compatibility.md"),
+        "guides/pytest-compatibility/",
+    ),
     ("Writing tests", Path("docs/guides/writing-tests.md"), "guides/writing-tests/"),
     ("Fixtures", Path("docs/guides/fixtures.md"), "guides/fixtures/"),
     ("Parallel execution", Path("docs/guides/parallelism.md"), "guides/parallelism/"),
@@ -222,7 +227,8 @@ future approved baselines must use the `testenix` identifier and record their co
 
 These tables are generated from the raw JSON committed in `benchmarks/`. They are development
 evidence for specific synthetic workloads, not a universal claim that Testenix is always faster
-than pytest.
+than pytest. `Testenix` in these results means the native `testenix run` engine. The
+`testenix pytest` compatibility bridge delegates to pytest and is not represented here.
 
 ![Preliminary Testenix throughput ratios](../_static/benchmark-speedup.svg)
 
@@ -452,7 +458,7 @@ def _render_llms_index() -> str:
     return f"""# Testenix
 
 > Testenix is an alpha, async-native, parallel-first Python testing framework with a
-> dependency-free runtime and a lossless result model.
+> dependency-free native runtime, a lossless result model, and an optional pytest bridge.
 
 Canonical documentation: {SITE_URL}
 Source repository: {REPOSITORY_URL}
@@ -462,6 +468,8 @@ Package index: https://pypi.org/project/testenix/
 
 - [Overview]({SITE_URL}): project positioning, example, guarantees, and maturity.
 - [Getting started]({SITE_URL}getting-started/): installation and the first run.
+- [Pytest compatibility]({SITE_URL}guides/pytest-compatibility/): run existing suites unchanged,
+  compare capabilities, and choose a migration boundary.
 - [Writing tests]({SITE_URL}guides/writing-tests/): tests, cases, tags, skips, xfail, and retries.
 - [Fixtures]({SITE_URL}guides/fixtures/): dependency graphs, cleanup, and scopes.
 - [Parallel execution]({SITE_URL}guides/parallelism/): workers, scheduling, crashes, and timeouts.

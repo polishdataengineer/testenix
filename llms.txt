@@ -1,7 +1,7 @@
 # Testenix
 
 > Testenix is an alpha, async-native, parallel-first Python testing framework with a
-> dependency-free runtime and a lossless result model.
+> dependency-free native runtime, a lossless result model, and an optional pytest bridge.
 
 Canonical documentation: https://polishdataengineer.github.io/testenix/
 Source repository: https://github.com/polishdataengineer/testenix
@@ -11,6 +11,8 @@ Package index: https://pypi.org/project/testenix/
 
 - [Overview](https://polishdataengineer.github.io/testenix/): project positioning, example, guarantees, and maturity.
 - [Getting started](https://polishdataengineer.github.io/testenix/getting-started/): installation and the first run.
+- [Pytest compatibility](https://polishdataengineer.github.io/testenix/guides/pytest-compatibility/): run existing suites unchanged,
+  compare capabilities, and choose a migration boundary.
 - [Writing tests](https://polishdataengineer.github.io/testenix/guides/writing-tests/): tests, cases, tags, skips, xfail, and retries.
 - [Fixtures](https://polishdataengineer.github.io/testenix/guides/fixtures/): dependency graphs, cleanup, and scopes.
 - [Parallel execution](https://polishdataengineer.github.io/testenix/guides/parallelism/): workers, scheduling, crashes, and timeouts.

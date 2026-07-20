@@ -40,6 +40,7 @@ jobs:
           fi
       - run: uv sync --locked --dev --no-editable
       - run: uv run --no-editable pytest
+      - run: uv run --no-editable testenix pytest -q
       - run: uv run --no-editable ruff check .
       - run: uv run --no-editable ruff format --check .
       - run: uv run --no-editable mypy
@@ -49,6 +50,12 @@ jobs:
       - run: uv run check-wheel-contents dist/*.whl
       - run: uv run --isolated --no-project --with ./dist/testenix-*.whl testenix --version
       - run: uv run --isolated --no-project --with ./dist/testenix-*.whl testenix run examples/basic --no-history
+      - name: Verify pytest extra from wheel
+        shell: bash
+        run: |
+          wheel_path="$(find dist -maxdepth 1 -type f -name '*.whl' -print -quit)"
+          uv run --isolated --no-project --with "testenix[pytest] @ $wheel_path" testenix pytest --version
+          uv run --isolated --no-project --with "testenix[pytest] @ $wheel_path" --with "pytest==8.3.0" testenix pytest --version
       - run: uv run --isolated --no-project --with ./dist/testenix-*.tar.gz testenix --version
       - run: uv run --isolated --no-project --with ./dist/testenix-*.tar.gz testenix run examples/basic --no-history
       - name: Store distributions

@@ -1354,6 +1354,11 @@ name = "testenix"
 version = "0.1.0"
 source = { editable = "." }
 
+[package.optional-dependencies]
+pytest = [
+    { name = "pytest" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "check-wheel-contents" },
@@ -1372,13 +1377,15 @@ docs = [
 ]
 
 [package.metadata]
+requires-dist = [{ name = "pytest", marker = "extra == 'pytest'", specifier = ">=8.3,<10" }]
+provides-extras = ["pytest"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "check-wheel-contents", specifier = ">=0.6.3,<0.7" },
     { name = "mypy", specifier = ">=2.3,<3" },
     { name = "pyright", specifier = ">=1.1.411,<2" },
-    { name = "pytest", specifier = ">=8.3" },
+    { name = "pytest", specifier = ">=8.3,<10" },
     { name = "pytest-xdist", specifier = ">=3.6" },
     { name = "ruff", specifier = ">=0.9" },
     { name = "twine", specifier = ">=6.2,<7" },

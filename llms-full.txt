@@ -22,11 +22,12 @@ description: Testenix is an async-native, parallel-first Python testing framewor
   <div class="testenix-kicker">Python testing framework · Alpha</div>
   <div class="testenix-title">Fast tests. Clear results.</div>
   <p>
-    Testenix unifies synchronous and asynchronous tests, fixtures, local parallelism,
-    retries, crash recovery, and machine-readable reports in one dependency-free runtime.
+    Testenix combines a dependency-free native runtime with a transparent bridge for
+    running existing pytest suites unchanged.
   </p>
   <div class="testenix-actions">
     <a href="https://polishdataengineer.github.io/testenix/getting-started/">Start testing</a>
+    <a href="https://polishdataengineer.github.io/testenix/guides/pytest-compatibility/">Run pytest suites</a>
     <a href="https://polishdataengineer.github.io/testenix/benchmarks/results/">See the benchmarks</a>
     <a href="https://polishdataengineer.github.io/testenix/for-llms/">Copy docs for an LLM</a>
   </div>
@@ -37,6 +38,7 @@ description: Testenix is an async-native, parallel-first Python testing framewor
 :maxdepth: 2
 
 getting-started
+guides/pytest-compatibility
 guides/writing-tests
 guides/fixtures
 guides/parallelism
@@ -55,10 +57,10 @@ for-llms
 ## Why Testenix
 
 <div class="metric-grid">
-  <div class="metric-card"><strong>0</strong><span>third-party runtime dependencies</span></div>
+  <div class="metric-card"><strong>0</strong><span>dependencies in the native runtime</span></div>
   <div class="metric-card"><strong>12</strong><span>Python and OS combinations in CI</span></div>
   <div class="metric-card"><strong>3</strong><span>console, JSON, and JUnit reports</span></div>
-  <div class="metric-card"><strong>3.15×</strong><span>100k synthetic throughput vs pytest</span></div>
+  <div class="metric-card"><strong>3.15×</strong><span>native <code>testenix run</code> on the 100k synthetic workload vs pytest</span></div>
 </div>
 
 Testenix is deliberately built around a few strong guarantees:
@@ -75,6 +77,17 @@ Testenix is deliberately built around a few strong guarantees:
   the same versioned result contracts.
 
 ## A complete first test
+
+Already have a pytest suite? Keep its fixtures, parametrization, markers, classes, configuration,
+and plugins:
+
+```console
+$ python -m pip install "testenix[pytest]"
+$ testenix pytest -q tests
+```
+
+[Read the compatibility contract](https://polishdataengineer.github.io/testenix/guides/pytest-compatibility/) before migrating individual
+modules to the native engine.
 
 ```python
 from collections.abc import AsyncIterator
@@ -108,9 +121,10 @@ If the first PyPI release is not available yet, install the current source with
 
 ## Performance evidence, with context
 
-The checked-in development baseline measured 100,000 empty tests across 16 generated modules on
-an Apple M4 Pro and CPython 3.11. Testenix completed that specific workload in a median 8.04
-seconds, compared with 25.33 seconds for pytest and 21.30 seconds for pytest-xdist.
+The checked-in development baseline measured native `testenix run` on 100,000 empty tests across
+16 generated modules on an Apple M4 Pro and CPython 3.11. Native Testenix completed that specific
+workload in a median 8.04 seconds, compared with 25.33 seconds for pytest and 21.30 seconds for
+pytest-xdist. These measurements do not apply to the delegated `testenix pytest` command.
 
 <div class="benchmark-caveat">
 This is a preliminary synthetic result from one machine, not a promise that every project will be
@@ -123,10 +137,12 @@ and limitations so that the claim can be evaluated rather than taken on trust.
 
 ## Project maturity
 
-Testenix is alpha software and is not yet a drop-in pytest replacement. Pytest has a much broader
-plugin ecosystem, richer IDE integration, and mature assertion rewriting. Testenix is a good fit
-when its native async model, built-in parallel execution, explicit failure semantics, or
-dependency-free runtime are more important than ecosystem compatibility.
+Testenix is alpha software. The `testenix pytest` bridge preserves an existing suite by delegating
+to real pytest, while `testenix run` is a distinct native engine rather than a drop-in pytest
+reimplementation. Pytest still has a much broader plugin ecosystem, richer IDE integration, and
+mature assertion rewriting. Choose the bridge for compatibility and the native engine when its
+async model, built-in parallel execution, explicit failure semantics, or dependency-free core are
+more important.
 
 ---
 
@@ -143,7 +159,8 @@ This guide takes a new project from installation to its first parallel Testenix 
 
 - CPython 3.11 or newer
 - Linux, macOS, or Windows
-- no runtime dependencies beyond the Python standard library
+- no runtime dependencies beyond the Python standard library for native `testenix run`
+- pytest in the same environment when using the optional compatibility bridge
 
 ## Install
 
@@ -161,13 +178,36 @@ $ uv add --dev testenix
 $ uv run testenix --version
 ```
 
+For an existing pytest project, install the compatibility extra:
+
+```console
+$ python -m pip install "testenix[pytest]"
+# or
+$ uv add --dev "testenix[pytest]"
+```
+
 Until the first PyPI release is visible, install directly from the protected `main` branch:
 
 ```console
 $ python -m pip install "testenix @ git+https://github.com/polishdataengineer/testenix.git@main"
+# include pytest when the project environment does not already provide it
+$ python -m pip install "testenix[pytest] @ git+https://github.com/polishdataengineer/testenix.git@main"
 ```
 
-## Create a test
+## Choose an execution mode
+
+Run an unchanged pytest suite through its real engine:
+
+```console
+$ testenix pytest -q tests
+```
+
+Use `testenix run` for native Testenix tests and the built-in scheduler, retries, history, and
+lossless reports. The two commands have deliberately separate semantics. See
+[pytest compatibility](https://polishdataengineer.github.io/testenix/guides/pytest-compatibility/) for the capability matrix and migration
+boundary.
+
+## Create a native test
 
 Testenix collects ordinary functions whose names begin with `test_`. Decorators are optional for
 simple tests.
@@ -247,10 +287,137 @@ collection and execution process trees before control returns to the caller.
 ## Next steps
 
 - [Write tests, cases, tags, skips, and expected failures](https://polishdataengineer.github.io/testenix/guides/writing-tests/)
+- [Run or migrate an existing pytest suite](https://polishdataengineer.github.io/testenix/guides/pytest-compatibility/)
 - [Build fixture graphs](https://polishdataengineer.github.io/testenix/guides/fixtures/)
 - [Understand process parallelism and timeouts](https://polishdataengineer.github.io/testenix/guides/parallelism/)
 - [Produce JSON and JUnit reports](https://polishdataengineer.github.io/testenix/guides/reports/)
 - [Review every configuration option](https://polishdataengineer.github.io/testenix/reference/configuration/)
+
+---
+
+# Document: Pytest compatibility
+
+Canonical URL: https://polishdataengineer.github.io/testenix/guides/pytest-compatibility/
+Source: docs/guides/pytest-compatibility.md
+
+---
+description: Run existing pytest suites unchanged through Testenix and understand the native migration boundary.
+---
+
+# Pytest compatibility
+
+Testenix can run an existing pytest suite without rewriting it. Use the compatibility bridge when
+the suite depends on pytest fixtures, parametrization, markers, classes, plugins, hooks, or
+configuration:
+
+```console
+$ python -m pip install "testenix[pytest]"
+$ testenix pytest -q tests
+```
+
+If a supported pytest (`>=8.3,<10`) is already installed in the same Python environment, installing
+the base `testenix` package is enough. The extra is a convenience for environments that do not
+already contain pytest.
+
+## What the command does
+
+Everything after `testenix pytest` is forwarded unchanged to:
+
+```console
+$ python -m pytest [PYTEST_ARGS ...]
+```
+
+Testenix hands its current CLI process to pytest from the same Python interpreter. On POSIX it uses
+a process overlay; on Windows it calls pytest's public console entry point in-process because the
+platform does not provide the same overlay semantics. Both paths preserve the foreground process,
+working directory, environment, terminal, standard streams, and pytest's signal handling. Pytest
+therefore remains responsible for collection, execution, configuration, plugin loading, output,
+descendants such as pytest-xdist workers, and exit status.
+
+```console
+$ testenix pytest tests/test_api.py::test_health -k smoke --maxfail=1
+$ testenix pytest -m "unit and not slow" tests
+$ testenix pytest -n auto tests
+$ testenix pytest --junitxml=reports/pytest.xml tests
+```
+
+The `-n` example requires pytest-xdist in the same environment. Testenix does not translate its
+native `--workers` option into an xdist option.
+
+## Capability matrix
+
+| Capability | `testenix pytest` | `testenix run` |
+| --- | --- | --- |
+| Plain module-level `test_*` functions | Yes, through pytest | Yes |
+| Pytest classes and unittest-style tests | Yes | No |
+| `pytest.fixture` and built-in fixtures | Yes | No |
+| `conftest.py` fixture and hook discovery | Yes | No |
+| `pytest.mark.parametrize` | Yes | No; use Testenix `@case` or `@cases` |
+| Pytest skip, xfail, and custom markers | Yes | No; use Testenix decorators and tags |
+| Pytest assertion rewriting | Yes | No |
+| Pytest plugins and hooks | Yes, when installed in the same environment | No |
+| `pytest.ini` and `[tool.pytest.ini_options]` | Yes | No |
+| Pytest node IDs and CLI selectors | Yes | No |
+| pytest-xdist | Yes, when installed and requested with `-n` | No; use native `--workers` |
+| Async tests | According to the installed pytest plugins | Native, without a plugin |
+| Testenix retries and `FLAKY` semantics | No | Yes |
+| Testenix duration history and scheduling | No | Yes |
+| Testenix lossless result model | No | Yes |
+| Testenix JSON/JUnit reporters | No; use pytest options or plugins | Yes |
+| Published native Testenix speedups | No | Only for the documented workloads |
+| Exit status | Unchanged pytest or plugin status | Testenix exit-code contract |
+
+Some simple pytest-authored functions also happen to run with `testenix run`, but that overlap is
+not a compatibility guarantee. In particular, the native collector does not interpret pytest
+markers. Running a pytest suite through the native command can turn a skip or xfail into an
+ordinary execution, collapse parametrized cases, miss class-based tests, or fail fixture setup.
+Use the explicit compatibility command until a suite has been intentionally migrated.
+
+## Boundaries
+
+`testenix pytest` does not use `[tool.testenix]`, the native collector, worker pool, retries,
+timeouts, tags, history, event model, JSON reporter, or JUnit reporter. Pass the corresponding
+pytest or plugin options after the subcommand. For example, use pytest's `--junitxml`, not
+Testenix's native `--junit`.
+
+Pytest and every required plugin must be installed beside the `testenix` executable in the same
+interpreter environment. For uv-managed projects, prefer:
+
+```console
+$ uv add --dev "testenix[pytest]"
+$ uv run testenix pytest -q tests
+```
+
+An isolated `uv tool install testenix` environment does not automatically see pytest plugins from
+the project environment. Install the required packages into the tool environment or invoke
+Testenix through the project environment instead.
+
+After the handoff, pytest owns signal handling and returns any status chosen by pytest or a plugin,
+unchanged. If pytest is missing, Testenix returns `2` with an installation hint before the handoff.
+Failure to hand the process to pytest returns `3`.
+
+## Performance and benchmark interpretation
+
+Compatibility mode has pytest's execution performance plus launcher and adapter overhead, which has
+not yet been measured separately. It is not expected to be faster than invoking `python -m pytest`
+directly. The published Testenix benchmarks exercise the native `testenix run` engine and must not
+be used to describe `testenix pytest`.
+
+## Migration path
+
+Use the bridge first to put Testenix in front of an unchanged suite without altering its semantics.
+Migrate individual modules to native Testenix only when their pytest dependencies have explicit
+equivalents:
+
+1. keep the whole suite green with `testenix pytest`;
+2. replace pytest fixtures with Testenix `@fixture` providers;
+3. replace `parametrize` with `@case` or `@cases`;
+4. replace pytest markers with Testenix tags, `@skip`, and `@xfail`;
+5. run migrated modules with `testenix run` and leave the remainder on the bridge;
+6. compare behavior before making native performance claims.
+
+The current bridge does not convert pytest outcomes into a Testenix `RunResult`. Deeper event and
+report aggregation is a future compatibility layer and requires explicit pytest hook integration.
 
 ---
 
@@ -687,14 +854,16 @@ Source: docs/reference/cli.md
 ## Top-level command
 
 ```text
-testenix [-h] [--version] [--config PYPROJECT] {run} ...
+testenix [-h] [--version]
+testenix [--config PYPROJECT] run [RUN_ARGS ...]
+testenix pytest [PYTEST_ARGS ...]
 ```
 
 | Option | Description |
 | --- | --- |
 | `-h`, `--help` | Show command help. |
 | `--version` | Print the installed Testenix version. |
-| `--config PATH` | Load `[tool.testenix]` from a specific pyproject file. |
+| `--config PATH` | Load `[tool.testenix]` for native `testenix run`. |
 
 ## `testenix run`
 
@@ -724,6 +893,33 @@ testenix run [PATH ...]
 
 CLI options override `[tool.testenix]` values for the current run.
 
+## `testenix pytest`
+
+```text
+testenix pytest [PYTEST_ARGS ...]
+```
+
+This compatibility command hands the current CLI process to pytest from the same interpreter and
+forwards every argument without translation. It preserves pytest configuration, collection,
+fixtures, parametrization, markers, classes, hooks, plugins, output, and normal exit status.
+
+```console
+$ testenix pytest -q tests
+$ testenix pytest tests/test_api.py::test_health -k smoke --maxfail=1
+$ testenix pytest -n auto tests
+$ testenix pytest --junitxml=reports/pytest.xml tests
+```
+
+Pytest and its plugins must be installed in the same Python environment as Testenix. The optional
+`testenix[pytest]` extra installs a supported pytest (`>=8.3,<10`) when needed. Testenix does not
+consume a leading `--`: pytest receives it unchanged, including its normal end-of-options meaning.
+
+`[tool.testenix]` and native options such as `--workers`, `--retries`, `--timeout`, `--tag`,
+`--json`, `--junit`, and `--history` do not affect this command. Pass pytest or plugin options
+instead. In particular, `testenix --config PATH pytest ...` is rejected; `pytest` must immediately
+follow `testenix`. See [pytest compatibility](https://polishdataengineer.github.io/testenix/guides/pytest-compatibility/) for the full
+boundary.
+
 ## Examples
 
 ```console
@@ -733,9 +929,12 @@ $ testenix run --tag unit --tag fast
 $ testenix run --retries 1 --timeout 10
 $ testenix run --json reports/run.json --junit reports/junit.xml
 $ testenix --config config/pyproject.toml run
+$ testenix pytest -q tests
 ```
 
 ## Exit codes
+
+The native `testenix run` command uses these codes:
 
 | Code | Meaning |
 | ---: | --- |
@@ -744,6 +943,11 @@ $ testenix --config config/pyproject.toml run
 | `2` | Invalid CLI/configuration, collection error, or empty explicit tag selection. |
 | `3` | Internal runner, reporter, or history failure. |
 | `130` | User interruption. |
+
+`testenix pytest` hands the current CLI process to pytest, so pytest or plugin exit statuses are
+returned unchanged. Standard pytest statuses are `0` success, `1` test failure, `2` interruption,
+`3` internal error, `4` usage error, and `5` no tests collected. Before the handoff, Testenix
+returns `2` when pytest is missing and `3` when pytest cannot take over the process.
 
 ---
 
@@ -755,6 +959,10 @@ Source: docs/reference/configuration.md
 # Configuration reference
 
 Project defaults live in `[tool.testenix]` in `pyproject.toml`.
+
+This table configures only the native `testenix run` engine. The `testenix pytest` compatibility
+command delegates configuration to pytest and therefore uses `pytest.ini`, `pyproject.toml`
+`[tool.pytest.ini_options]`, or arguments passed after the subcommand.
 
 ```toml
 [tool.testenix]
@@ -960,7 +1168,8 @@ Source: docs/benchmarks/results.md
 
 These tables are generated from the raw JSON committed in `benchmarks/`. They are development
 evidence for specific synthetic workloads, not a universal claim that Testenix is always faster
-than pytest.
+than pytest. `Testenix` in these results means the native `testenix run` engine. The
+`testenix pytest` compatibility bridge delegates to pytest and is not represented here.
 
 ![Preliminary Testenix throughput ratios](https://polishdataengineer.github.io/testenix/_static/benchmark-speedup.svg)
 
@@ -1113,6 +1322,19 @@ files.
 Correctness wins over speed: a run with a missing, duplicated, or incorrectly finalized result is
 invalid and excluded from performance comparisons.
 
+## Pytest compatibility bridge
+
+Measurements of `testenix pytest` must be reported separately from native `testenix run`
+measurements. The compatibility command hands the current interpreter to pytest through a POSIX
+process overlay or pytest's in-process console entry point on Windows; it does not execute tests
+through the Testenix engine.
+
+A compatibility-overhead comparison must use the same interpreter, working directory,
+environment, pytest configuration, plugins, and arguments for both `python -m pytest ...` and
+`testenix pytest ...`. Any difference measures adapter overhead only and must not be presented as a
+Testenix execution speedup. Native comparisons continue to use `testenix run` and must validate
+that both runners execute the same tests and produce equivalent outcomes.
+
 Run the reproducible local harness with:
 
 ```bash
@@ -1147,7 +1369,7 @@ Source: docs/performance-analysis.md
 
 ## Executive summary
 
-The optimized v0.1 runner is faster than pytest and pytest-xdist in the checked-in synthetic
+The optimized native v0.1 `testenix run` engine is faster than pytest and pytest-xdist in the checked-in synthetic
 large-suite scenarios. The largest recorded comparison is 100,000 passing tests across 16 modules:
 Testenix completed the suite in a median 8.038 seconds, pytest in 25.333 seconds, and pytest-xdist
 in 21.300 seconds. Every measured command had to report the expected test count or the harness
@@ -1157,6 +1379,10 @@ and Testenix's samples ranged from 7.912 to 8.096 seconds.
 This is evidence for the tested workload and machine, not a universal claim about every Python
 project. Import-heavy suites, fixture-heavy suites, slow tests, failure output, different operating
 systems, and real repositories still need independent measurements.
+
+These results do not apply to `testenix pytest`. The compatibility command delegates to pytest and
+has pytest execution performance plus launcher and adapter overhead, which has not yet been
+measured separately.
 
 ## Environment and method
 
@@ -1179,7 +1405,7 @@ Testenix, pytest, and pytest-xdist versions.
 
 ## Results
 
-| Scenario | pytest | pytest-xdist | Testenix | Testenix advantage |
+| Scenario | pytest | pytest-xdist | Native Testenix | Native Testenix advantage |
 |---|---:|---:|---:|---:|
 | 10,000 no-op tests, 16 modules | 2.477 s | 2.106 s | 0.869 s | 2.85x vs pytest |
 | 10,000 uneven tests, 16 modules | 3.076 s | 2.138 s | 1.345 s | 2.29x vs pytest |
@@ -1289,7 +1515,8 @@ Relevant upstream constraints are documented in the
 
 No universal “always faster than pytest” statement should be published until the real-project and
 cross-platform gates pass. The supported claim today is narrower: Testenix is materially faster in the
-measured large passing-suite scenarios while retaining supervised isolation and complete results.
+measured native large passing-suite scenarios while retaining supervised isolation and complete
+results.
 
 ---
 
@@ -1303,6 +1530,22 @@ Source: docs/architecture.md
 Testenix is a native Python testing framework. Its core does not depend on pytest.
 Compatibility adapters may translate foreign test frameworks into the same manifest and event
 contracts, but they are not part of native execution.
+
+The first pytest compatibility bridge deliberately does not translate pytest internals. On POSIX,
+`testenix pytest` uses `os.execv` to replace itself with `sys.executable -m pytest`. On Windows it
+calls pytest's public `console_main` entry point in the existing process because the platform's
+`exec` family does not provide equivalent replacement semantics. Both paths keep pytest in the
+foreground CLI process with the same working directory, environment, terminal, streams, signal
+handling, and exit status. This preserves semantics without making the native core depend on
+pytest:
+
+```text
+POSIX:   testenix pytest ==exec==> Python -m pytest -> collector/plugins/executor -> output/status
+Windows: testenix pytest =========> pytest.console_main -> collector/plugins/executor -> output/status
+```
+
+The bridge is a CLI infrastructure adapter, not a native collection adapter. It does not emit
+Testenix events or construct a `RunResult` in version 0.1.
 
 ## Product contract
 
@@ -1325,7 +1568,7 @@ Authoring API -> supervised collection -> inert manifest -> affinity scheduler -
 - `events`, `aggregate`, and `scheduler` remain engine-independent.
 - `runner` is the application service connecting the native engine with execution policy.
 - reporters and storage consume completed domain results or versioned events.
-- optional compatibility adapters depend inward; the core never imports them.
+- optional compatibility adapters stay at the CLI boundary; the native core never imports pytest.
 
 ## Version 0.1 scope
 
@@ -1337,7 +1580,8 @@ Authoring API -> supervised collection -> inert manifest -> affinity scheduler -
 - deterministic scheduling based on historical durations;
 - append-only JSONL events and a pure reducer;
 - console, JSON, and JUnit output plus local SQLite duration history;
-- retries represented as immutable attempts and finalized as `FLAKY` when appropriate.
+- retries represented as immutable attempts and finalized as `FLAKY` when appropriate;
+- an optional platform-aware pytest handoff for unchanged legacy suites.
 
 Remote workers, distributed storage, result caching, automatic quarantine, and a stable third-party
 plugin SDK are deliberately outside version 0.1.
@@ -1402,6 +1646,7 @@ Source: docs/roadmap.md
 - Local process workers with deterministic LPT scheduling.
 - Immutable attempts and lossless setup/call/teardown aggregation.
 - Console, JSON, JUnit XML, JSONL events, and SQLite duration history.
+- Optional `testenix pytest` compatibility bridge preserving the real pytest engine and plugins.
 
 ## 0.2 — fast feedback
 
@@ -1412,7 +1657,7 @@ Source: docs/roadmap.md
 
 ## 0.3 — adoption
 
-- Optional pytest collection/execution adapter in a separate extra or distribution.
+- Pytest hook adapter translating collection and outcomes into Testenix events and `RunResult`.
 - A migration checker and automated transformations for common fixtures and markers.
 - Versioned reporter and selector plugin interfaces.
 - IDE protocol and machine-readable collection manifest.
@@ -1440,6 +1685,13 @@ All notable changes will be documented in this file. The format follows Keep a C
 project intends to use Semantic Versioning once its public API reaches stability.
 
 ## [Unreleased]
+
+### Added
+
+- `testenix pytest [PYTEST_ARGS ...]` compatibility bridge for unchanged pytest suites, preserving
+  the real pytest collector, fixtures, parametrization, markers, plugins, output, and exit status.
+- Optional `testenix[pytest]` installation extra and a documented native-versus-compatibility
+  capability matrix.
 
 ## [0.1.0] - 2026-07-20
 
