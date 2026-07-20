@@ -30,6 +30,19 @@ files.
 Correctness wins over speed: a run with a missing, duplicated, or incorrectly finalized result is
 invalid and excluded from performance comparisons.
 
+## Pytest compatibility bridge
+
+Measurements of `testenix pytest` must be reported separately from native `testenix run`
+measurements. The compatibility command hands the current interpreter to pytest through a POSIX
+process overlay or pytest's in-process console entry point on Windows; it does not execute tests
+through the Testenix engine.
+
+A compatibility-overhead comparison must use the same interpreter, working directory,
+environment, pytest configuration, plugins, and arguments for both `python -m pytest ...` and
+`testenix pytest ...`. Any difference measures adapter overhead only and must not be presented as a
+Testenix execution speedup. Native comparisons continue to use `testenix run` and must validate
+that both runners execute the same tests and produce equivalent outcomes.
+
 Run the reproducible local harness with:
 
 ```bash

@@ -11,6 +11,7 @@ context. Every documentation page also includes **Copy this page** and
 | [`llms.txt`](https://polishdataengineer.github.io/testenix/llms.txt) | A model should first discover the project and choose relevant pages. |
 | [`llms-full.txt`](https://polishdataengineer.github.io/testenix/llms-full.txt) | You want one self-contained reference with guides, API, architecture, and benchmark context. |
 | [Python API reference](reference/api.md) | The task is specifically about authoring or embedding Testenix. |
+| [Pytest compatibility](guides/pytest-compatibility.md) | A model must choose between delegation and native migration. |
 | [Benchmark results](benchmarks/results.md) | A model needs to evaluate or repeat performance claims. |
 
 `llms.txt` follows the emerging llms.txt proposal, but it should be treated as a convenience
@@ -29,6 +30,7 @@ workload-specific and preserve all documented limitations.
 ## What the full reference contains
 
 - installation and first-run instructions;
+- the pytest compatibility bridge, capability matrix, and migration boundary;
 - native tests, cases, tags, skips, expected failures, and fixtures;
 - parallelism, timeouts, retries, crash recovery, reports, and history;
 - CLI, configuration, and generated Python API reference;

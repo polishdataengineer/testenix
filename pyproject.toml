@@ -17,6 +17,7 @@ classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",
   "Framework :: AsyncIO",
+  "Framework :: Pytest",
   "Intended Audience :: Developers",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
@@ -26,6 +27,9 @@ classifiers = [
   "Topic :: Software Development :: Testing",
   "Typing :: Typed",
 ]
+
+[project.optional-dependencies]
+pytest = ["pytest>=8.3,<10"]
 
 [project.urls]
 Homepage = "https://github.com/polishdataengineer/testenix"
@@ -42,7 +46,7 @@ testenix = "testenix.cli:main"
 dev = [
   "mypy>=2.3,<3",
   "pyright>=1.1.411,<2",
-  "pytest>=8.3",
+  "pytest>=8.3,<10",
   "pytest-xdist>=3.6",
   "ruff>=0.9",
   "twine>=6.2,<7",

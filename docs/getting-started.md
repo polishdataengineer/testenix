@@ -6,7 +6,8 @@ This guide takes a new project from installation to its first parallel Testenix 
 
 - CPython 3.11 or newer
 - Linux, macOS, or Windows
-- no runtime dependencies beyond the Python standard library
+- no runtime dependencies beyond the Python standard library for native `testenix run`
+- pytest in the same environment when using the optional compatibility bridge
 
 ## Install
 
@@ -24,13 +25,36 @@ $ uv add --dev testenix
 $ uv run testenix --version
 ```
 
+For an existing pytest project, install the compatibility extra:
+
+```console
+$ python -m pip install "testenix[pytest]"
+# or
+$ uv add --dev "testenix[pytest]"
+```
+
 Until the first PyPI release is visible, install directly from the protected `main` branch:
 
 ```console
 $ python -m pip install "testenix @ git+https://github.com/polishdataengineer/testenix.git@main"
+# include pytest when the project environment does not already provide it
+$ python -m pip install "testenix[pytest] @ git+https://github.com/polishdataengineer/testenix.git@main"
 ```
 
-## Create a test
+## Choose an execution mode
+
+Run an unchanged pytest suite through its real engine:
+
+```console
+$ testenix pytest -q tests
+```
+
+Use `testenix run` for native Testenix tests and the built-in scheduler, retries, history, and
+lossless reports. The two commands have deliberately separate semantics. See
+[pytest compatibility](guides/pytest-compatibility.md) for the capability matrix and migration
+boundary.
+
+## Create a native test
 
 Testenix collects ordinary functions whose names begin with `test_`. Decorators are optional for
 simple tests.
@@ -110,6 +134,7 @@ collection and execution process trees before control returns to the caller.
 ## Next steps
 
 - [Write tests, cases, tags, skips, and expected failures](guides/writing-tests.md)
+- [Run or migrate an existing pytest suite](guides/pytest-compatibility.md)
 - [Build fixture graphs](guides/fixtures.md)
 - [Understand process parallelism and timeouts](guides/parallelism.md)
 - [Produce JSON and JUnit reports](guides/reports.md)

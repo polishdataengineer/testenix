@@ -2,7 +2,8 @@
 
 These tables are generated from the raw JSON committed in `benchmarks/`. They are development
 evidence for specific synthetic workloads, not a universal claim that Testenix is always faster
-than pytest.
+than pytest. `Testenix` in these results means the native `testenix run` engine. The
+`testenix pytest` compatibility bridge delegates to pytest and is not represented here.
 
 ![Preliminary Testenix throughput ratios](../_static/benchmark-speedup.svg)
 

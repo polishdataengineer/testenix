@@ -4,6 +4,22 @@ Testenix is a native Python testing framework. Its core does not depend on pytes
 Compatibility adapters may translate foreign test frameworks into the same manifest and event
 contracts, but they are not part of native execution.
 
+The first pytest compatibility bridge deliberately does not translate pytest internals. On POSIX,
+`testenix pytest` uses `os.execv` to replace itself with `sys.executable -m pytest`. On Windows it
+calls pytest's public `console_main` entry point in the existing process because the platform's
+`exec` family does not provide equivalent replacement semantics. Both paths keep pytest in the
+foreground CLI process with the same working directory, environment, terminal, streams, signal
+handling, and exit status. This preserves semantics without making the native core depend on
+pytest:
+
+```text
+POSIX:   testenix pytest ==exec==> Python -m pytest -> collector/plugins/executor -> output/status
+Windows: testenix pytest =========> pytest.console_main -> collector/plugins/executor -> output/status
+```
+
+The bridge is a CLI infrastructure adapter, not a native collection adapter. It does not emit
+Testenix events or construct a `RunResult` in version 0.1.
+
 ## Product contract
 
 Testenix aims to be typed, async-native, parallel-first, deterministic, and lossless when reporting
@@ -25,7 +41,7 @@ Authoring API -> supervised collection -> inert manifest -> affinity scheduler -
 - `events`, `aggregate`, and `scheduler` remain engine-independent.
 - `runner` is the application service connecting the native engine with execution policy.
 - reporters and storage consume completed domain results or versioned events.
-- optional compatibility adapters depend inward; the core never imports them.
+- optional compatibility adapters stay at the CLI boundary; the native core never imports pytest.
 
 ## Version 0.1 scope
 
@@ -37,7 +53,8 @@ Authoring API -> supervised collection -> inert manifest -> affinity scheduler -
 - deterministic scheduling based on historical durations;
 - append-only JSONL events and a pure reducer;
 - console, JSON, and JUnit output plus local SQLite duration history;
-- retries represented as immutable attempts and finalized as `FLAKY` when appropriate.
+- retries represented as immutable attempts and finalized as `FLAKY` when appropriate;
+- an optional platform-aware pytest handoff for unchanged legacy suites.
 
 Remote workers, distributed storage, result caching, automatic quarantine, and a stable third-party
 plugin SDK are deliberately outside version 0.1.

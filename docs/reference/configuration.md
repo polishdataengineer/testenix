@@ -2,6 +2,10 @@
 
 Project defaults live in `[tool.testenix]` in `pyproject.toml`.
 
+This table configures only the native `testenix run` engine. The `testenix pytest` compatibility
+command delegates configuration to pytest and therefore uses `pytest.ini`, `pyproject.toml`
+`[tool.pytest.ini_options]`, or arguments passed after the subcommand.
+
 ```toml
 [tool.testenix]
 paths = ["tests"]
