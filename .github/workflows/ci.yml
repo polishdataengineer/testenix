@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.29"
+          enable-cache: true
+      - name: Install project
+        run: uv sync --locked --dev --no-editable
+      - name: Run tests
+        run: uv run --no-editable pytest
+
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.29"
+          enable-cache: true
+      - run: uv sync --locked --dev --no-editable
+      - run: uv run --no-editable ruff check .
+      - run: uv run --no-editable ruff format --check .
+      - run: uv run --no-editable mypy
+      - run: uv run --no-editable pyright --pythonversion 3.11 src/testenix
+      - run: uv build --no-sources
+      - run: uv run twine check --strict dist/*
+      - run: uv run check-wheel-contents dist/*.whl
+      - run: uv run --isolated --no-project --with ./dist/testenix-*.whl testenix --version
+      - run: uv run --isolated --no-project --with ./dist/testenix-*.whl testenix run examples/basic --no-history
+      - run: uv run --isolated --no-project --with ./dist/testenix-*.tar.gz testenix --version
+      - run: uv run --isolated --no-project --with ./dist/testenix-*.tar.gz testenix run examples/basic --no-history

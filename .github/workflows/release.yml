@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions: {}
+
+concurrency:
+  group: pypi-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.29"
+          python-version: "3.11"
+          enable-cache: false
+      - name: Verify tag matches package version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: test "$RELEASE_TAG" = "v$(uv version --short)"
+      - run: uv sync --locked --dev --no-editable
+      - run: uv run --no-editable pytest
+      - run: uv run --no-editable ruff check .
+      - run: uv run --no-editable ruff format --check .
+      - run: uv run --no-editable mypy
+      - run: uv run --no-editable pyright --pythonversion 3.11 src/testenix
+      - run: uv build --no-sources
+      - run: uv run twine check --strict dist/*
+      - run: uv run check-wheel-contents dist/*.whl
+      - run: uv run --isolated --no-project --with ./dist/testenix-*.whl testenix --version
+      - run: uv run --isolated --no-project --with ./dist/testenix-*.whl testenix run examples/basic --no-history
+      - run: uv run --isolated --no-project --with ./dist/testenix-*.tar.gz testenix --version
+      - run: uv run --isolated --no-project --with ./dist/testenix-*.tar.gz testenix run examples/basic --no-history
+      - name: Store distributions
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-package-distributions
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 5
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/p/testenix
+    permissions:
+      id-token: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: python-package-distributions
+          path: dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
+        with:
+          packages-dir: dist/

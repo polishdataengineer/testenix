@@ -1,0 +1,65 @@
+{
+  "environment": {
+    "cpu_count": 14,
+    "machine": "arm64",
+    "platform": "macOS-26.5.1-arm64-arm-64bit",
+    "python": "3.11.14"
+  },
+  "measurements": {
+    "ptf": {
+      "command": "python -m ptf run <suite> --workers 4 --no-history",
+      "maximum": 16.70272699999623,
+      "mean": 13.063902888990318,
+      "median": 11.956735417013988,
+      "median_tests_per_second": 8363.486897744993,
+      "minimum": 10.532246249960735,
+      "samples": [
+        16.70272699999623,
+        11.956735417013988,
+        10.532246249960735
+      ],
+      "stdev": 3.2308006793814275
+    },
+    "pytest": {
+      "command": "python -m pytest -q <suite>",
+      "maximum": 35.34597308305092,
+      "mean": 34.35190404132785,
+      "median": 33.95667954091914,
+      "median_tests_per_second": 2944.928695972645,
+      "minimum": 33.75305950001348,
+      "samples": [
+        35.34597308305092,
+        33.75305950001348,
+        33.95667954091914
+      ],
+      "stdev": 0.8668882425369376
+    },
+    "pytest_xdist": {
+      "command": "python -m pytest -q -n 4 <suite>",
+      "maximum": 45.750517500098795,
+      "mean": 44.542168597341515,
+      "median": 44.32166579202749,
+      "median_tests_per_second": 2256.2328877536875,
+      "minimum": 43.55432249989826,
+      "samples": [
+        43.55432249989826,
+        45.750517500098795,
+        44.32166579202749
+      ],
+      "stdev": 1.1145780524889097
+    }
+  },
+  "scenario": {
+    "measured_execution_orders": [
+      ["pytest", "pytest_xdist", "ptf"],
+      ["pytest_xdist", "ptf", "pytest"],
+      ["ptf", "pytest", "pytest_xdist"]
+    ],
+    "repeats": 3,
+    "test_count": 100000,
+    "test_modules": 16,
+    "uneven": false,
+    "warmups": 0,
+    "workers": 4
+  }
+}

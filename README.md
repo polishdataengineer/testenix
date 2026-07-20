@@ -1,0 +1,190 @@
+# Testenix
+
+[![CI](https://github.com/polishdataengineer/testenix/actions/workflows/ci.yml/badge.svg)](https://github.com/polishdataengineer/testenix/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/polishdataengineer/testenix/blob/main/LICENSE)
+
+**Fast tests. Clear results.**
+
+Testenix is an experimental native Python testing framework built around five guarantees:
+
+1. tests and fixtures are ordinary typed Python functions;
+2. synchronous and asynchronous code use the same execution model;
+3. local parallel execution is a core feature rather than a plugin;
+4. retries never erase previous failures;
+5. every report is derived from one versioned, lossless result model.
+
+The project is currently an alpha. Its runtime has no third-party dependencies and does not depend
+on pytest.
+
+## Installation
+
+After the first PyPI release, install it with:
+
+```bash
+python -m pip install testenix
+```
+
+Testenix requires Python 3.11 or newer. The project is currently an alpha; pin the version before
+using it in CI.
+
+To try the current checkout before publication:
+
+```bash
+python -m pip install .
+# or, for an isolated CLI installation
+uv tool install .
+```
+
+You can also install the latest source directly from GitHub:
+
+```bash
+python -m pip install "testenix @ git+https://github.com/polishdataengineer/testenix.git@main"
+```
+
+## Quick start
+
+Create `tests/test_multiplication.py` with this complete example:
+
+```python
+from collections.abc import AsyncIterator
+
+from testenix import case, cases, fixture, test
+
+
+@fixture(scope="module")
+async def multiplier() -> AsyncIterator[int]:
+    yield 2
+
+
+@test("multiplication uses an async fixture", tags={"unit"})
+@cases(
+    case(id="positive", value=3, expected=6),
+    case(id="zero", value=0, expected=0),
+)
+async def multiplication(multiplier: int, value: int, expected: int) -> None:
+    assert multiplier * value == expected
+```
+
+Run it with:
+
+```bash
+testenix run tests
+```
+
+Plain `test_*` functions are collected without `@test`; the decorator is useful for descriptions,
+tags, and per-test timeouts.
+
+Configuration lives in `pyproject.toml`:
+
+```toml
+[tool.testenix]
+workers = "auto"
+retries = 0
+paths = ["tests"]
+history = ".testenix/history.sqlite3"
+# json = "reports/testenix.json"
+# junit = "reports/junit.xml"
+```
+
+Command-line options override this table:
+
+```text
+testenix run [PATH ...] [--workers auto|N] [--retries N] [--timeout SECONDS]
+                    [--tag TAG ...] [--json FILE] [--junit FILE]
+                    [--history FILE | --no-history]
+```
+
+Repeated `--tag` options use AND semantics: a selected test must contain every requested tag.
+The console report is always printed. JSON preserves the complete run/test/attempt/phase model,
+JUnit targets CI systems, and SQLite history supplies duration estimates to later runs. History is
+enabled at `.testenix/history.sqlite3` by default; use `--no-history` for a side-effect-free run.
+
+The same runner is available as a typed library API:
+
+```python
+from testenix import TestenixConfig, Status, run
+
+result = run("tests", TestenixConfig(workers="auto", history_path=None))
+failed_ids = [test.test.id for test in result.tests if test.status is not Status.PASS]
+```
+
+Async applications can `await testenix.run_async(...)`; cancellation terminates active collection and
+execution process trees before returning control to the caller.
+
+## Exit codes
+
+| Code | Meaning |
+| ---: | --- |
+| `0` | No gating failure. Passing, skipped, xfailed, and cached tests are non-gating. |
+| `1` | A test failed, errored, timed out, crashed, unexpectedly passed, or was finalized as flaky. |
+| `2` | Collection, command/configuration error, or an explicit tag filter selected no tests. |
+| `3` | Internal runner, report, or history error. |
+| `130` | Interrupted by the user. |
+
+## Result semantics
+
+Testenix preserves the complete hierarchy `run -> test -> attempt -> phase`. The phases are `setup`,
+`call`, and `teardown`. A failed attempt followed by a successful retry is reported as `FLAKY`,
+not `PASS`. Setup errors, teardown errors, timeouts, process crashes, expected failures, unexpected
+passes, and infrastructure failures remain distinct outcomes.
+
+A process crash gets one automatic recovery attempt, but `CRASH -> PASS` is still `FLAKY` and
+gates CI; Testenix cannot prove that an abrupt process exit was unrelated to the test. An unfinished
+asyncio task is cancelled at the test boundary and fails its owner instead of leaking into the next
+test.
+
+## Where Testenix is deliberately different
+
+Testenix is not yet a drop-in replacement for pytest. Its v0.1 value is a smaller, coherent native
+stack: async tests and async fixtures need no plugin, parallel execution and duration-aware
+scheduling need no xdist, every retry remains visible, and a worker crash cannot silently erase
+tests that completed before it. The runtime has no third-party dependencies.
+
+The trade-off is ecosystem maturity. pytest currently has much broader plugin, IDE, assertion
+rewriting, and migration support. Testenix should only claim to be better for the guarantees above
+until the adoption work in the roadmap is complete and measured on real projects.
+
+## Current limitations
+
+- Parallel workers are isolated processes. Normal tests from one module stay together, so a
+  module-scoped fixture is not duplicated merely because `--workers` is greater than one.
+- Reproducible 1k/10k/100k comparisons, profiler findings, memory measurements, and the Rust/PyO3
+  decision are documented in
+  [the performance analysis](https://github.com/polishdataengineer/testenix/blob/main/docs/performance-analysis.md).
+  Session-scoped fixtures remain per worker process, not run-global.
+- Every test with an explicit or global timeout is hard-isolated in its own process. This makes a
+  blocking synchronous call killable on every supported platform, but module/session fixtures used
+  by timed tests cannot be shared with neighbouring tests.
+- Collection imports user modules in a supervised process. A crash becomes a collection error and
+  a hung import has a bounded 30-second deadline instead of taking down the coordinator.
+- Case values are reconstructed by rediscovering the module in the worker and do not need to be
+  pickle-serializable. They must still be reproducible during module import; reports store a
+  JSON-safe representation when a value itself is not serializable.
+- Synchronous test and fixture bodies run outside Testenix's internal asyncio loop. APIs restricted
+  to Python's main thread, such as installing signal handlers, are not supported inside those
+  bodies in v0.1.
+- On Windows, a script that calls the programmatic `run()`/`run_async()` API must use the standard
+  `if __name__ == "__main__":` multiprocessing guard. The `testenix` CLI handles process startup
+  itself.
+- Test impact analysis, result caching, remote workers, and the pytest migration adapter are not
+  part of version 0.1.
+
+## Project status
+
+Testenix is pre-1.0 software. The distribution, import package, CLI, configuration namespace, and
+state directory consistently use `testenix`. The project is licensed under MIT and its release
+workflow uses PyPI Trusted Publishing; the first PyPI release has not been published yet.
+
+## Development
+
+The project targets Python 3.11 and newer.
+
+```bash
+uv sync --no-editable
+uv run --no-editable pytest
+uv run --no-editable ruff check .
+```
+
+See [the architecture](https://github.com/polishdataengineer/testenix/blob/main/docs/architecture.md),
+[the roadmap](https://github.com/polishdataengineer/testenix/blob/main/docs/roadmap.md), and
+[the benchmarking contract](https://github.com/polishdataengineer/testenix/blob/main/docs/benchmarking.md).

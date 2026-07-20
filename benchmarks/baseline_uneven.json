@@ -1,0 +1,73 @@
+{
+  "environment": {
+    "cpu_count": 14,
+    "machine": "arm64",
+    "platform": "macOS-26.5.1-arm64-arm-64bit",
+    "python": "3.11.14"
+  },
+  "measurements": {
+    "ptf": {
+      "command": "python -m ptf run <suite> --workers 4 --no-history",
+      "maximum": 1.89167058293242,
+      "mean": 1.7233188833808526,
+      "median": 1.687250709044747,
+      "median_tests_per_second": 5926.801480297848,
+      "minimum": 1.6314293750328943,
+      "samples": [
+        1.89167058293242,
+        1.6474662499967963,
+        1.687250709044747,
+        1.7587774998974055,
+        1.6314293750328943
+      ],
+      "stdev": 0.10618124265004915
+    },
+    "pytest": {
+      "command": "python -m pytest -q <suite>",
+      "maximum": 4.604614667012356,
+      "mean": 4.1029246331891045,
+      "median": 3.989588374970481,
+      "median_tests_per_second": 2506.524247648478,
+      "minimum": 3.9274788330076262,
+      "samples": [
+        3.9274788330076262,
+        4.015672332956456,
+        4.604614667012356,
+        3.9772689579986036,
+        3.989588374970481
+      ],
+      "stdev": 0.2822771416840913
+    },
+    "pytest_xdist": {
+      "command": "python -m pytest -q -n 4 <suite>",
+      "maximum": 4.446900167036802,
+      "mean": 4.149471866805106,
+      "median": 4.172738166991621,
+      "median_tests_per_second": 2396.507904355188,
+      "minimum": 3.913430624990724,
+      "samples": [
+        3.913430624990724,
+        4.446900167036802,
+        4.242722625029273,
+        3.971567749977112,
+        4.172738166991621
+      ],
+      "stdev": 0.21509646733157367
+    }
+  },
+  "scenario": {
+    "measured_execution_orders": [
+      ["pytest", "pytest_xdist", "ptf"],
+      ["pytest_xdist", "ptf", "pytest"],
+      ["ptf", "pytest", "pytest_xdist"],
+      ["pytest", "pytest_xdist", "ptf"],
+      ["pytest_xdist", "ptf", "pytest"]
+    ],
+    "repeats": 5,
+    "test_count": 10000,
+    "test_modules": 16,
+    "uneven": true,
+    "warmups": 1,
+    "workers": 4
+  }
+}

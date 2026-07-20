@@ -1,0 +1,73 @@
+{
+  "environment": {
+    "cpu_count": 14,
+    "machine": "arm64",
+    "platform": "macOS-26.5.1-arm64-arm-64bit",
+    "python": "3.11.14"
+  },
+  "measurements": {
+    "ptf": {
+      "command": "python -m ptf run <suite> --workers 4 --no-history",
+      "maximum": 1.7116772920126095,
+      "mean": 1.502868283400312,
+      "median": 1.435844917083159,
+      "median_tests_per_second": 6964.540446550771,
+      "minimum": 1.3881782499374822,
+      "samples": [
+        1.429609208018519,
+        1.5490317499497905,
+        1.7116772920126095,
+        1.3881782499374822,
+        1.435844917083159
+      ],
+      "stdev": 0.1310964294474671
+    },
+    "pytest": {
+      "command": "python -m pytest -q <suite>",
+      "maximum": 3.829467291943729,
+      "mean": 3.576046774792485,
+      "median": 3.525189833017066,
+      "median_tests_per_second": 2836.726665423691,
+      "minimum": 3.4471233329968527,
+      "samples": [
+        3.525189833017066,
+        3.829467291943729,
+        3.4471233329968527,
+        3.486959083005786,
+        3.591494332998991
+      ],
+      "stdev": 0.15133149438138227
+    },
+    "pytest_xdist": {
+      "command": "python -m pytest -q -n 4 <suite>",
+      "maximum": 4.801107374951243,
+      "mean": 4.528515108395368,
+      "median": 4.522718584048562,
+      "median_tests_per_second": 2211.059524081286,
+      "minimum": 4.1274927500635386,
+      "samples": [
+        4.1274927500635386,
+        4.732106874929741,
+        4.459149957983755,
+        4.522718584048562,
+        4.801107374951243
+      ],
+      "stdev": 0.2652452670901062
+    }
+  },
+  "scenario": {
+    "measured_execution_orders": [
+      ["pytest", "pytest_xdist", "ptf"],
+      ["pytest_xdist", "ptf", "pytest"],
+      ["ptf", "pytest", "pytest_xdist"],
+      ["pytest", "pytest_xdist", "ptf"],
+      ["pytest_xdist", "ptf", "pytest"]
+    ],
+    "repeats": 5,
+    "test_count": 10000,
+    "test_modules": 16,
+    "uneven": false,
+    "warmups": 1,
+    "workers": 4
+  }
+}

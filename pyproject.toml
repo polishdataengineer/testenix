@@ -1,0 +1,78 @@
+[build-system]
+requires = ["uv_build>=0.11.26,<0.12"]
+build-backend = "uv_build"
+
+[project]
+name = "testenix"
+version = "0.1.0"
+description = "Fast, async-native, parallel-first testing for Python."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Dominik Franczyk" }]
+keywords = ["asyncio", "parallel", "python", "test-runner", "testing", "unit-testing"]
+dependencies = []
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Framework :: AsyncIO",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development :: Testing",
+  "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/polishdataengineer/testenix"
+Documentation = "https://github.com/polishdataengineer/testenix/tree/main/docs"
+Repository = "https://github.com/polishdataengineer/testenix"
+Issues = "https://github.com/polishdataengineer/testenix/issues"
+Changelog = "https://github.com/polishdataengineer/testenix/blob/main/CHANGELOG.md"
+
+[project.scripts]
+testenix = "testenix.cli:main"
+
+[dependency-groups]
+dev = [
+  "mypy>=2.3,<3",
+  "pyright>=1.1.411,<2",
+  "pytest>=8.3",
+  "pytest-xdist>=3.6",
+  "ruff>=0.9",
+  "twine>=6.2,<7",
+  "check-wheel-contents>=0.6.3,<0.7",
+]
+
+[tool.uv.build-backend]
+module-name = "testenix"
+source-include = [
+  "CHANGELOG.md",
+  "CONTRIBUTING.md",
+  "benchmarks/**",
+  "docs/**",
+  "examples/**",
+  "tests/**",
+  "uv.lock",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+files = ["src/testenix"]
+python_version = "3.11"
+strict = true
