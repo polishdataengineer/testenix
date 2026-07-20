@@ -41,6 +41,7 @@ class FixtureMetadata:
 
     scope: Scope = Scope.TEST
     name: str | None = None
+    autouse: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,6 +139,7 @@ def fixture(
     *,
     scope: Scope | str = Scope.TEST,
     name: str | None = None,
+    autouse: bool = False,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
 
 
@@ -147,6 +149,7 @@ def fixture(
     *,
     scope: Scope | str = Scope.TEST,
     name: str | None = None,
+    autouse: bool = False,
 ) -> Callable[..., Any]:
     """Declare a dependency provider with test, module or session lifetime."""
 
@@ -157,7 +160,9 @@ def fixture(
         raise ValueError(f"unknown fixture scope {scope!r}; expected one of: {choices}") from error
     if name is not None and (not isinstance(name, str) or not name.strip()):
         raise ValueError("fixture name must be a non-empty string")
-    metadata = FixtureMetadata(scope=normalised_scope, name=name)
+    if not isinstance(autouse, bool):
+        raise TypeError("fixture autouse must be a boolean")
+    metadata = FixtureMetadata(scope=normalised_scope, name=name, autouse=autouse)
 
     def decorate(target: F) -> F:
         if not callable(target):

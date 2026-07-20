@@ -18,7 +18,7 @@ Windows: testenix pytest =========> pytest.console_main -> collector/plugins/exe
 ```
 
 The bridge is a CLI infrastructure adapter, not a native collection adapter. It does not emit
-Testenix events or construct a `RunResult` in version 0.1.
+Testenix events or construct a `RunResult` in version 0.2.
 
 The migration adapter is separate from that handoff. It statically converts a deliberately small
 pytest subset or generates SHA-pinned wrappers around the standard unittest protocol. Its
@@ -73,7 +73,7 @@ Authoring API -> supervised collection -> inert manifest -> affinity scheduler -
 - migration analyzers depend on serializable migration contracts, while shadow execution and
   atomic publication remain application/infrastructure concerns.
 
-## Version 0.1 scope
+## Version 0.2 scope
 
 - explicit `@test` and `@fixture` authoring API, plus conventional `test_*` discovery;
 - sync functions, coroutines, generators, and async-generator fixture teardown;
@@ -87,9 +87,12 @@ Authoring API -> supervised collection -> inert manifest -> affinity scheduler -
 - an optional platform-aware pytest handoff for unchanged legacy suites.
 - conservative pytest/unittest migration with static diagnostics, differential validation, source
   fingerprints, and create-only publication.
+- dependency-free `tmp_path` and reversible `monkeypatch` fixtures, plus native autouse resolution;
+- conservative migration of bare pytest-asyncio coroutine markers through isolated fresh-loop
+  wrappers, plus simple pytest classes.
 
 Remote workers, distributed storage, result caching, automatic quarantine, and a stable third-party
-plugin SDK are deliberately outside version 0.1.
+plugin SDK are deliberately outside version 0.2.
 
 ## Fixture scopes and process isolation
 
@@ -98,7 +101,7 @@ between parallel shared workers. Multiple modules assigned to one shard execute 
 process and fixture runtime. A test with an explicit timeout (including a global timeout applied at
 selection) is instead a single-test isolation unit with a hard process deadline.
 
-Scope therefore has the following concrete meaning in version 0.1:
+Scope therefore has the following concrete meaning in version 0.2:
 
 | Scope | Lifetime |
 | --- | --- |

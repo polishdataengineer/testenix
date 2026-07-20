@@ -22,6 +22,7 @@ from testenix.migration_service import (
     _candidate_problem,
     _run_process,
     migrate,
+    render_migration_summary,
 )
 
 
@@ -264,6 +265,10 @@ def test_dry_run_analyzes_without_subprocess_or_output(
     assert report.native_serial is None
     assert report.native_parallel is None
     assert not report.published
+    assert not any(diagnostic.code == "MIG006" for diagnostic in report.diagnostics)
+    summary = render_migration_summary(report)
+    assert "analyzed candidate: 1 tests in 1 files" in summary
+    assert "  converted:" not in summary
     assert not (project / "converted").exists()
     assert source_bytes(project) == before
 
@@ -290,10 +295,9 @@ def test_unsupported_source_exits_four_without_output(tmp_path: Path) -> None:
     project = write_project(
         tmp_path,
         {
-            "tests/test_class.py": """
-                class TestUnsupported:
-                    def test_method(self) -> None:
-                        pass
+            "tests/test_capture.py": """
+                def test_capture(capsys) -> None:
+                    pass
             """,
         },
     )
@@ -303,10 +307,43 @@ def test_unsupported_source_exits_four_without_output(tmp_path: Path) -> None:
 
     assert report.status is MigrationStatus.UNSUPPORTED
     assert report.exit_code == 4
-    assert any(diagnostic.code == "PYT301_CLASS_TEST" for diagnostic in report.diagnostics)
+    assert any(diagnostic.code == "PYT209_BUILTIN_FIXTURE" for diagnostic in report.diagnostics)
     assert not report.published
     assert not (project / "converted").exists()
     assert source_bytes(project) == before
+
+
+def test_unsupported_summary_groups_diagnostics_and_names_partial_work_honestly(
+    tmp_path: Path,
+) -> None:
+    project = write_project(
+        tmp_path,
+        {
+            "tests/test_plain.py": "def test_plain():\n    assert True\n",
+            "tests/test_capture.py": """
+                def test_first(capsys) -> None:
+                    pass
+
+                def test_second(capsys) -> None:
+                    pass
+            """,
+        },
+    )
+
+    report = migrate(options(project, "pytest", dry_run=True))
+    summary = render_migration_summary(report)
+    document = report.to_dict()
+
+    assert report.status is MigrationStatus.UNSUPPORTED
+    assert report.converted_tests == 1
+    assert not any(diagnostic.code == "MIG006" for diagnostic in report.diagnostics)
+    assert "statically convertible subset: 1 tests in 1 files" in summary
+    assert "  converted:" not in summary
+    assert "PYT209_BUILTIN_FIXTURE: 2 occurrence(s) in 1 file(s)" in summary
+    assert summary.count("PYT209_BUILTIN_FIXTURE") == 1
+    assert "--report-json FILE|- retains every line-addressed entry" in summary
+    assert len(document["diagnostics"]) == 2
+    assert {entry["line"] for entry in document["diagnostics"]} == {1, 4}
 
 
 def test_failing_source_baseline_exits_one_without_output(tmp_path: Path) -> None:

@@ -41,10 +41,12 @@ They must be separate modules; a file that mixes both test models is rejected.
 The destination defaults to `testenix_migrated`. It must be a new directory inside the project,
 with an existing real parent. There is deliberately no `--force` and no in-place mode.
 An integer `--workers` value must be at least 2 so the parallel gate cannot silently repeat the
-serial command. A one-module suite still has one schedulable affinity unit, which is disclosed as a
-`MIG006` warning; spread tests across independent modules to exercise multiple workers. An
-audit-report path must also be new, inside the project, and disjoint from every selected source and
-the output suite. Testenix never replaces an existing report.
+serial command. During `--check` or publication, a one-module candidate still has one schedulable
+affinity unit, which is disclosed as a `MIG006` warning; spread tests across independent modules to
+exercise multiple workers. The warning is not shown for `--dry-run` or an already-blocked migration
+because no parallel candidate is run in either case. An audit-report path must also be new, inside
+the project, and disjoint from every selected source and the output suite. Testenix never replaces
+an existing report.
 
 ## Transaction and rollback contract
 
@@ -89,13 +91,25 @@ with external effects.
 
 ## Pytest conversion contract
 
-The current converter supports the subset below:
+The v0.2 converter supports the subset below:
 
 - module-level pytest-default `test*` functions and normal Python `assert` statements;
+- simple `Test*` classes with a fresh zero-argument instance per test method, including ordinary
+  helper methods; inheritance, class decorators, custom construction, and pytest class lifecycle
+  hooks remain outside the safe subset;
+- bare `@pytest.mark.asyncio` on `async def` tests. The generated synchronous wrapper runs every
+  test or parametrized case in a fresh, closed `asyncio.Runner`, matching pytest-asyncio's default
+  function-scoped loop isolation;
 - one static `pytest.mark.parametrize` with static names, rows, IDs, and unmarked
   `pytest.param(..., id=...)` values;
-- local fixtures with no parameters, autouse, or `request`, using function or module scope;
+- local fixtures using function or module scope, including a statically boolean `autouse=True`;
 - simple fixtures from an adjacent `conftest.py` in the same directory;
+- native `tmp_path`, which supplies a fresh `pathlib.Path` and removes its temporary directory at
+  test teardown;
+- native `monkeypatch.setattr` in object/attribute and dotted-import forms, plus `setenv` and
+  idempotent `undo`; successful changes are restored in LIFO order during test teardown.
+  `monkeypatch` may also flow through statically resolved module-local helpers when every use can
+  be proven to stay inside this supported subset;
 - static `pytest.mark.skip` and `pytest.mark.skipif`;
 - plain argument-free custom markers, converted to Testenix tags;
 - pytest runtime helpers `approx`, `deprecated_call`, `fail`, `raises`, and `warns`. Generated
@@ -103,14 +117,21 @@ The current converter supports the subset below:
 
 It blocks, with a file and line diagnostic:
 
-- pytest test classes, xfail, runtime skip/xfail/importorskip/exit, xunit lifecycle hooks;
-- built-in fixtures such as `tmp_path`, `monkeypatch`, `capsys`, and `request`;
-- autouse or parametrized fixtures, fixture overrides, and inherited ancestor-`conftest` fixtures;
+- complex pytest test classes, xfail, runtime skip/xfail/importorskip/exit, and xunit lifecycle
+  hooks;
+- built-in fixtures other than `tmp_path` and `monkeypatch`, such as `capsys`, `caplog`, and
+  `request`; monkeypatch operations outside the documented native subset, imported or dynamically
+  rebound helpers, and values that escape static analysis are also unsupported;
+- dynamically configured autouse fixtures, parametrized fixtures, fixture overrides, and inherited
+  ancestor-`conftest` fixtures;
 - session-scoped fixtures, because pytest creates one per run while Testenix session scope is
   currently worker-local;
 - stacked, dynamic, indirect, scoped, or per-case-marked parametrization;
 - `usefixtures`, module-level `pytestmark`, hook functions, plugin registration, and semantic
-  plugin markers such as asyncio/anyio, timeout, order, repeat, or flaky;
+  plugin markers such as anyio, configured asyncio, timeout, order, repeat, or flaky;
+- unmarked async tests, async fixtures, custom `event_loop_policy`, non-function asyncio loop
+  scopes, and enabled asyncio debug mode. Testenix checks the effective pytest configuration and
+  relevant `PYTEST_ADDOPTS` overrides before accepting bare asyncio markers;
 - decorators and required parameters whose execution meaning cannot be established statically.
 
 Any converted pytest file whose name is not already `test_*.py` is renamed in the generated copy
@@ -167,6 +188,11 @@ hashes, every source-to-target mapping, per-test outcomes, generated files, line
 timings and summaries for all validation runs, publication status, and an `originals_modified`
 flag. It is false for a successful transaction and true when a terminal source recheck detects
 drift; the flag reports observed state and does not claim that Testenix caused an independent edit.
+The console groups repeated diagnostics by code and shows the first location, so large suites do
+not produce hundreds of near-identical lines. `--report-json FILE` and `--report-json -` always
+retain every individual source- and line-addressed diagnostic. On a blocked transaction, the
+console calls any safe in-memory result a *statically convertible subset* rather than implying that
+those tests were published.
 
 ## Performance with thousands of migrated tests
 

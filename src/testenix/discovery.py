@@ -280,7 +280,9 @@ def _fixture_dependencies(
             module_name=module_name,
             function=function,
         )
-        if definition is not None:
+        # Built-ins are runtime fallbacks rather than decorated source
+        # functions, so there is no provider closure to register for them.
+        if definition is not None and not definition.builtin:
             dependencies.append(definition)
     return tuple(dependencies)
 
@@ -338,12 +340,16 @@ def _implicit_case_id(parameters: dict[str, Any], ordinal: int) -> str:
 
 
 def _source_line(function: Any) -> int | None:
-    code = getattr(function, "__code__", None)
+    try:
+        source_function = inspect.unwrap(function)
+    except ValueError:
+        source_function = function
+    code = getattr(source_function, "__code__", None)
     first_line = getattr(code, "co_firstlineno", None)
     if isinstance(first_line, int):
         return first_line
     try:
-        return inspect.getsourcelines(function)[1]
+        return inspect.getsourcelines(source_function)[1]
     except (OSError, TypeError):
         return None
 

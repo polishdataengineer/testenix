@@ -51,17 +51,21 @@ native `--workers` option into an xdist option.
 | Capability | `testenix pytest` | `migrate` then `run` | Direct `testenix run` |
 | --- | --- | --- | --- |
 | Plain module-level pytest-default `test*` functions | Yes, through pytest | Yes | `test_` or native `@test` |
-| Pytest classes | Yes | Blocked | No |
-| Simple local fixture | Yes | Converted | Only native `@fixture` |
+| Simple pytest classes | Yes | Fresh-instance wrappers | No direct class collection |
+| Complex class lifecycle/inheritance | Yes | Blocked | No |
+| Simple local fixture | Yes | Converted, including static autouse | Only native `@fixture` |
 | Session-scoped pytest fixture | Yes | Blocked: run-global vs worker-local | Native scope is worker-local |
-| Built-in/dynamic fixture | Yes | Blocked | No pytest fixture semantics |
+| `tmp_path` | Yes | Native built-in | Native built-in |
+| `monkeypatch` | Yes | `setattr`/`setenv` subset | Native reversible subset |
+| Other built-in/dynamic fixture | Yes | Blocked | No pytest fixture semantics |
 | Adjacent `conftest.py` fixture | Yes | Simple static subset | No automatic conftest discovery |
 | Static single `parametrize` | Yes | Converted to cases | Use `@case` or `@cases` |
 | Skip and plain custom marker | Yes | Converted | Use Testenix decorators/tags |
 | Pytest xfail | Yes | Blocked due semantic differences | Use native `@xfail` intentionally |
 | Pytest assertion rewriting | Yes | No | No |
 | Plugins, hooks, pytest config | Yes | Blocked/not translated | No |
-| Async plugin semantics | According to plugins | Blocked | Native async needs no plugin |
+| Bare `@pytest.mark.asyncio` coroutine | According to plugin | Fresh function-scoped loop wrapper | Native async needs no plugin |
+| Configured async/anyio plugin semantics | According to plugins | Blocked | No plugin semantics |
 | Testenix worker scheduler/history | No | Yes after migration | Yes |
 | Testenix retries and lossless results | No | Yes after migration | Yes |
 | Published native speedups | No | Measure generated suite | Only documented workloads |
@@ -116,9 +120,12 @@ explicit equivalents:
 5. keep unsupported modules on `testenix pytest` and keep all originals during rollout;
 6. benchmark the generated directory before making a native performance claim.
 
-The migrator replaces simple fixtures, parametrization, skip conditions, and plain markers in the
-generated copy. It never performs edits in place. Manual rewrites are still necessary for blocked
-plugin, hook, built-in fixture, class, xfail, and dynamic behavior.
+The migrator replaces simple fixtures, parametrization, skip conditions, plain markers, bare
+pytest-asyncio coroutine markers with a fresh closed loop per test or case, and the supported
+built-in fixtures in the generated copy. It wraps simple pytest class methods with a fresh instance
+per test. It never performs edits in place.
+Manual rewrites are still necessary for blocked plugin, hook, complex class lifecycle, xfail, and
+dynamic behavior.
 
 The current bridge does not convert pytest outcomes into a Testenix `RunResult`. Deeper event and
 report aggregation is a future compatibility layer and requires explicit pytest hook integration.
