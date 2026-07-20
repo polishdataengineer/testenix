@@ -262,7 +262,11 @@ def test_pytest_xfail_semantics():
         raise
 
     assert returncode == 0
-    assert int(process_marker.read_text(encoding="utf-8")) == process.pid
+    assert process_marker.read_text(encoding="utf-8").isdigit()
+    if os.name == "posix":
+        # POSIX exec preserves the PID. A Windows virtualenv executable may be
+        # a launcher whose PID differs from the in-process Python interpreter.
+        assert int(process_marker.read_text(encoding="utf-8")) == process.pid
     assert teardown_marker.read_text(encoding="utf-8") == "closed"
     test_suite = ET.parse(report).find(".//testsuite")
     assert test_suite is not None
