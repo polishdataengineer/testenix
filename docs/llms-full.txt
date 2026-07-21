@@ -1,6 +1,6 @@
 # Testenix complete documentation
 
-> Generated from the Testenix repository. Treat current 0.1 behavior separately from roadmap items, and treat every benchmark as workload-specific.
+> Generated from the Testenix repository. Treat current documented behavior separately from roadmap items, and treat every benchmark as workload-specific.
 
 Canonical documentation: https://polishdataengineer.github.io/testenix/
 Source repository: https://github.com/polishdataengineer/testenix
@@ -153,7 +153,7 @@ $ python -m pip install testenix
 $ testenix run tests
 ```
 
-If the first PyPI release is not available yet, install the current source with
+To evaluate unreleased source changes, install the current `main` branch with
 `python -m pip install "testenix @ git+https://github.com/polishdataengineer/testenix.git@main"`.
 
 ## Performance evidence, with context
@@ -2480,6 +2480,8 @@ project intends to use Semantic Versioning once its public API reaches stability
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-21
+
 ### Added
 
 - Native console controls for quiet output, one- or two-level verbosity, skipped/expected-failure
@@ -2492,6 +2494,12 @@ project intends to use Semantic Versioning once its public API reaches stability
   emitted after execution rather than presented as live progress.
 - Documentation now distinguishes native Testenix rendering from the unchanged pytest output
   produced by the transparent `testenix pytest` compatibility bridge.
+
+### Fixed
+
+- Compact reports retain complete failing node IDs and wrap unusually varied per-file status
+  summaries without dropping the file name or any status counts.
+- Generated LLM API snapshots are stable across all supported Python versions.
 
 ## [0.2.0] - 2026-07-20
 

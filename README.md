@@ -345,9 +345,9 @@ See the [generated results and chart](https://polishdataengineer.github.io/teste
 
 ## Project status
 
-Testenix 0.2.0 is pre-1.0 software. The distribution, import package, CLI, configuration namespace,
-and state directory consistently use `testenix`. The project is licensed under MIT and its release
-workflow uses PyPI Trusted Publishing; the first PyPI release has not been published yet.
+Testenix 0.2.1 is pre-1.0 software. The distribution, import package, CLI, configuration namespace,
+and state directory consistently use `testenix`. The project is licensed under MIT and releases
+are published to PyPI through Trusted Publishing.
 
 ## Development
 

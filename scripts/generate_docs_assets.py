@@ -727,8 +727,8 @@ def _render_llms_full(generated: dict[Path, str]) -> str:
     sections = [
         "# Testenix complete documentation",
         "",
-        "> Generated from the Testenix repository. Treat current 0.1 behavior separately from "
-        "roadmap items, and treat every benchmark as workload-specific.",
+        "> Generated from the Testenix repository. Treat current documented behavior separately "
+        "from roadmap items, and treat every benchmark as workload-specific.",
         "",
         f"Canonical documentation: {SITE_URL}",
         f"Source repository: {REPOSITORY_URL}",
