@@ -87,12 +87,12 @@ Pytest and its plugins must be installed in the same Python environment as Teste
 `testenix[pytest]` extra installs a supported pytest (`>=8.3,<10`) when needed. Testenix does not
 consume a leading `--`: pytest receives it unchanged, including its normal end-of-options meaning.
 
-`[tool.testenix]` and native options such as `--workers`, `--retries`, `--timeout`, `--tag`,
-`--json`, `--junit`, `--history`, `--show-skips`, and `--durations` do not affect this command.
-Flags such as `-q`, `-v`, and `--color` are forwarded to pytest and have pytest's meaning, not the
-native reporter's meaning. Pytest's equivalent spellings include `-rs`, `--durations=N`, and
-`--color=yes|no|auto`; Testenix does not translate the native spellings. Pass pytest or plugin
-options instead. In particular,
+`[tool.testenix]` does not configure this command. Arguments after `pytest` are never interpreted as
+native Testenix options, even when their names overlap: `-q`, `-v`, `--color`, `--show-skips`,
+`--durations`, `--workers`, and every other token are forwarded unchanged. They can therefore be
+handled by pytest or a plugin, or rejected by pytest if unsupported. Pytest's equivalent spellings
+include `-rs`, `--durations=N`, and `--color=yes|no|auto`; Testenix does not translate native
+spellings. In particular,
 `testenix --config PATH pytest ...` is rejected; `pytest` must immediately follow `testenix`. See
 [pytest compatibility](../guides/pytest-compatibility.md) for the full boundary.
 

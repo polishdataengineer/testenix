@@ -301,6 +301,65 @@ def test_compact_truncates_a_long_path_to_requested_width() -> None:
     assert len(max_width_line) == 120
 
 
+def test_compact_wraps_varied_status_counts_without_losing_the_file() -> None:
+    statuses = (
+        Status.PASS,
+        Status.FAIL,
+        Status.ERROR_SETUP,
+        Status.ERROR_TEARDOWN,
+        Status.SKIP,
+        Status.XFAIL,
+        Status.TIMEOUT,
+    )
+    path = "tests/test_mix.py"
+    results = tuple(
+        _result(
+            f"{path}::test_{status.value}",
+            path=path,
+            line=index,
+            status=status,
+            message=None if status is Status.PASS else "detail",
+        )
+        for index, status in enumerate(statuses)
+    )
+
+    rendered = ConsoleReporter(verbosity=0, width=80).render(_run(*results))
+    compact_table = rendered.partition("\n\nProblems")[0]
+
+    assert path in compact_table
+    for label in (
+        "1 passed",
+        "1 failed",
+        "1 setup errors",
+        "1 teardown errors",
+        "1 skipped",
+        "1 xfailed",
+        "1 timed out",
+    ):
+        assert label in compact_table
+    assert max(map(len, compact_table.splitlines())) <= 80
+
+
+@pytest.mark.parametrize("verbosity", [0, -1])
+def test_problem_section_preserves_a_long_node_id(verbosity: int) -> None:
+    long_id = (
+        "tests/integration/test_checkout.py::test_rejects_expired_card["
+        + "customer-with-a-very-long-parametrized-case-id-" * 4
+        + "]"
+    )
+    failed = _result(
+        long_id,
+        path="tests/integration/test_checkout.py",
+        status=Status.FAIL,
+        message="boom",
+    )
+
+    rendered = ConsoleReporter(verbosity=verbosity, width=60).render(_run(failed))
+    problems = rendered.partition("Problems (1)\n")[2]
+
+    assert long_id in problems
+
+
 def test_render_is_deterministic_and_sorts_files_then_source_lines() -> None:
     later_file = _result("z.py::test_z", path="z.py", line=1)
     later_line = _result("a.py::test_later", path="a.py", line=20)

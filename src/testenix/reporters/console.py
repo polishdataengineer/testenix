@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import textwrap
 from collections import Counter
 from collections.abc import Mapping
 from io import StringIO
@@ -59,6 +60,7 @@ _ANSI_COLLECT = "\x1b[31m"
 _ANSI_HEADER = "\x1b[1;36m"
 _DEFAULT_WIDTH = 100
 _MAX_WIDTH = 120
+_MIN_COMPACT_PATH_WIDTH = 12
 
 
 class ConsoleReporter:
@@ -154,7 +156,7 @@ class ConsoleReporter:
             self._write_compact_rows(output, ordered_tests, use_color=use_color, width=width)
             if _has_problems(ordered_tests):
                 _write_section_break(output)
-            self._write_problem_section(output, ordered_tests, use_color=use_color, width=width)
+            self._write_problem_section(output, ordered_tests, use_color=use_color)
         elif self.verbosity == 1:
             self._write_legacy_rows(output, ordered_tests, use_color=use_color)
         elif self.verbosity == 2:
@@ -164,7 +166,7 @@ class ConsoleReporter:
         else:
             if run.collection_issues and _has_problems(ordered_tests):
                 _write_section_break(output)
-            self._write_problem_section(output, ordered_tests, use_color=use_color, width=width)
+            self._write_problem_section(output, ordered_tests, use_color=use_color)
 
         if self.show_skips and any(result.status in _SKIP_STATUSES for result in ordered_tests):
             if self.verbosity != 1 or ordered_tests:
@@ -230,11 +232,28 @@ class ConsoleReporter:
             prefix = f"{label:<5} "
             suffix_width = counts_width + 1 + duration_width
             path_width = max(0, width - len(prefix) - suffix_width - 2)
-            fitted_path = _fit_path(path, path_width).ljust(path_width)
             suffix = f"{counts_text:<{counts_width}} {duration_text:>{duration_width}}"
-            output.write(
-                f"{_paint_status(prefix, label_status, use_color)}{fitted_path}  {suffix}\n"
-            )
+            minimum_path_width = min(len(path), _MIN_COMPACT_PATH_WIDTH)
+            if path_width >= minimum_path_width:
+                fitted_path = _fit_path(path, path_width).ljust(path_width)
+                output.write(
+                    f"{_paint_status(prefix, label_status, use_color)}{fitted_path}  {suffix}\n"
+                )
+                continue
+
+            # Keep the file identifiable when an unusually varied status summary
+            # cannot share a terminal row with it. Continuation lines retain every
+            # count instead of trading correctness for a hard truncation.
+            layout_width = max(width, len(prefix) + 1)
+            fitted_path = _fit_path(path, layout_width - len(prefix))
+            output.write(f"{_paint_status(prefix, label_status, use_color)}{fitted_path}\n")
+            indentation = " " * len(prefix)
+            for line in _wrap_compact_details(
+                counts_text,
+                duration_text,
+                max(1, layout_width - len(indentation)),
+            ):
+                output.write(f"{indentation}{line}\n")
 
     def _write_problem_section(
         self,
@@ -242,7 +261,6 @@ class ConsoleReporter:
         tests: list[TestResult],
         *,
         use_color: bool,
-        width: int,
     ) -> None:
         problems = [result for result in tests if result.status not in _NON_PROBLEM_STATUSES]
         if not problems:
@@ -251,8 +269,7 @@ class ConsoleReporter:
         output.write(f"Problems ({len(problems)})\n")
         for result in problems:
             status = f"{result.status.value.upper():<9}"
-            identifier = _fit_path(result.test.id, width - len(status) - 2)
-            output.write(f"{_paint_status(status, result.status, use_color)} {identifier}\n")
+            output.write(f"{_paint_status(status, result.status, use_color)} {result.test.id}\n")
             for line in _failure_details(result):
                 output.write(f"          {line}\n")
 
@@ -460,6 +477,32 @@ def _fit_path(value: str, available: int) -> str:
     left = remaining // 3
     right = remaining - left
     return f"{value[:left]}...{value[-right:]}"
+
+
+def _wrap_compact_details(counts_text: str, duration_text: str, width: int) -> tuple[str, ...]:
+    counts = counts_text.split(", ")
+    items = [f"{count}," for count in counts[:-1]]
+    items.append(f"{counts[-1]} {duration_text}")
+    lines: list[str] = []
+    current = ""
+    for item in items:
+        candidate = item if not current else f"{current} {item}"
+        if len(candidate) <= width:
+            current = candidate
+            continue
+        if current:
+            lines.append(current)
+        wrapped = textwrap.wrap(
+            item,
+            width=width,
+            break_long_words=True,
+            break_on_hyphens=False,
+        )
+        lines.extend(wrapped[:-1])
+        current = wrapped[-1]
+    if current:
+        lines.append(current)
+    return tuple(lines)
 
 
 def _paint_status(text: str, status: Status, enabled: bool) -> str:
