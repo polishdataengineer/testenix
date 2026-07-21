@@ -3,7 +3,7 @@
 ## Executive summary
 
 The checked-in headline numbers are a **historical Testenix 0.1.0 synthetic baseline**, not current
-Testenix 0.2.1 results. In the largest recorded comparison, 100,000 generated no-op tests were spread
+Testenix 0.3.0 results. In the largest recorded comparison, 100,000 generated no-op tests were spread
 evenly across 16 modules and run with four workers and `--no-history`. Testenix completed the suite
 in a median 8.038 seconds, pytest in 25.333 seconds, and pytest-xdist 3.8's default `load` scheduler
 in 21.300 seconds. Every command had to report the expected test count or the harness rejected the
@@ -13,8 +13,8 @@ samples ranged from 7.912 to 8.096 seconds.
 This is evidence for the tested workload and machine, not a universal claim about every Python
 project. Import-heavy suites, fixture-heavy suites, slow tests, failure output, default history,
 alternative pytest-xdist schedulers, different operating systems, and real repositories still need
-independent measurements. No clean Testenix 0.2.1 scaling matrix is checked in yet, so `3.15×` must
-not be presented as a 0.2.1 speedup.
+independent measurements. No clean Testenix 0.3.0 scaling matrix is checked in yet, so `3.15×` must
+not be presented as a 0.3.0 speedup.
 
 These results do not apply to `testenix pytest`. The compatibility command delegates to pytest and
 has pytest execution performance plus launcher and adapter overhead, which has not yet been
@@ -65,7 +65,7 @@ approximately 520 MiB on the same generated suite. These older macOS `time` figu
 the current baseline JSON and are process maxima, not aggregate memory across every xdist/Testenix
 child process. The console renderer changed substantially after these captures, and the historical
 harness did not record output byte counts. Current schema-version 2 runs do record stdout/stderr
-sizes, but a clean 0.2.1 matrix is still pending.
+sizes, but a clean 0.3.0 matrix is still pending.
 
 ### Migrated-suite measurements
 
@@ -215,7 +215,7 @@ Relevant upstream constraints are documented in the
 
 ## Next measurement gates
 
-- publish the clean Testenix 0.2.1 dimension-sweep matrix for 100/500/1,000/3,000 tests,
+- publish the clean Testenix 0.3.0 dimension-sweep matrix for 100/500/1,000/3,000 tests,
   balanced/dominant/single-module layouts, 1/2/4/adaptive-auto workers, and both history modes;
 - compare pytest-xdist `load`, `loadfile`, `loadscope`, and `worksteal` where each strategy is valid;
 - collection, execution, IPC-byte, process-start, CPU, and aggregate-memory telemetry;
@@ -232,5 +232,5 @@ Relevant upstream constraints are documented in the
 No universal “always faster than pytest” statement should be published until the current-version,
 real-project, and cross-platform gates pass. The supported claim today is historical and narrower:
 Testenix 0.1.0 was materially faster in the recorded native large passing-suite scenarios while
-retaining supervised isolation and complete results. Testenix 0.2.1 has no checked-in speedup claim
+retaining supervised isolation and complete results. Testenix 0.3.0 has no checked-in speedup claim
 yet.

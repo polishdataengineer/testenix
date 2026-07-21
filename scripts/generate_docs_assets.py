@@ -34,7 +34,7 @@ MIGRATION_BASELINES = (
     ROOT / "benchmarks" / "migration_baseline_unittest_3000_delay_1ms.json",
 )
 
-SCALING_MATRIX = ROOT / "benchmarks" / "scaling_matrix_0_2_1.json"
+SCALING_MATRIX = ROOT / "benchmarks" / "scaling_matrix_0_3_0.json"
 
 LLM_DOCUMENTS = (
     ("Overview", Path("docs/index.md"), ""),
@@ -463,7 +463,7 @@ logical CPU count.
 
 ```console
 $ uv run --no-editable python benchmarks/run_scaling_matrix.py \\
-    --output benchmarks/scaling_matrix_0_2_1.json
+    --output benchmarks/scaling_matrix_0_3_0.json
 ```
 
 The command refuses a dirty worktree or an installed Testenix version that differs from

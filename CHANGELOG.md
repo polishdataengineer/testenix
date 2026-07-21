@@ -5,6 +5,8 @@ project intends to use Semantic Versioning once its public API reaches stability
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-21
+
 ### Added
 
 - `testenix tune` and its `testenix benchmark` alias for fresh-process, counterbalanced,

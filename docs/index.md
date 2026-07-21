@@ -154,12 +154,12 @@ The checked-in development baseline measured **Testenix 0.1.0**, not the current
 `testenix run` completed 100,000 generated no-op tests across 16 modules on one Apple M4 Pro and
 CPython 3.11 machine in a median 8.04 seconds, compared with 25.33 seconds for pytest and 21.30
 seconds for pytest-xdist. It used four workers, `--no-history`, and pytest-xdist's default `load`
-scheduler. These measurements do not apply to Testenix 0.2.1, a real project, the default-history
+scheduler. These measurements do not apply to Testenix 0.3.0, a real project, the default-history
 mode, or the delegated `testenix pytest` command.
 
 <div class="benchmark-caveat">
 This is historical synthetic evidence from one machine, not a promise that every project will be
-3.15× faster. No clean Testenix 0.2.1 scaling matrix is checked in yet. The benchmark page publishes
+3.15× faster. No clean Testenix 0.3.0 scaling matrix is checked in yet. The benchmark page publishes
 the raw samples, environment, variance, methodology, current matrix status, and limitations.
 </div>
 

@@ -5,10 +5,10 @@ evidence for specific synthetic workloads, not a universal claim that Testenix i
 than pytest. `Testenix` in these results means the native `testenix run` engine. The
 `testenix pytest` compatibility bridge delegates to pytest and is not represented here.
 
-## Testenix 0.2.1 scaling matrix
+## Testenix 0.3.0 scaling matrix
 
 No current-version matrix is checked in yet. The historical results below must therefore not be
-described as Testenix 0.2.1 performance. The new provenance-gated harness covers
+described as Testenix 0.3.0 performance. The new provenance-gated harness covers
 100/500/1,000/3,000 tests, balanced/dominant/single-module layouts, 1/2/4/auto workers, and both
 default history and `--no-history`, plus explicit safe-module sharding. Its default design uses
 dimension sweeps; use
@@ -20,7 +20,7 @@ logical CPU count.
 
 ```console
 $ uv run --no-editable python benchmarks/run_scaling_matrix.py \
-    --output benchmarks/scaling_matrix_0_2_1.json
+    --output benchmarks/scaling_matrix_0_3_0.json
 ```
 
 The command refuses a dirty worktree or an installed Testenix version that differs from
@@ -62,7 +62,7 @@ sensitive argument indexes in `redact_arguments`.
 The checked-in `3.15×` figure is a Testenix 0.1.0 result for 100,000 generated no-op
 tests across 16 modules, four workers, disabled history (`--no-history`), and pytest-xdist's default
 `load` strategy. It is retained as transparent historical evidence; it is not a measurement of
-Testenix 0.2.1.
+Testenix 0.3.0.
 
 ![Historical Testenix 0.1.0 throughput ratios](../_static/benchmark-speedup.svg)
 
