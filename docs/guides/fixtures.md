@@ -64,7 +64,7 @@ issues instead of hanging the run.
 
 ## Built-in fixtures
 
-Testenix 0.2 provides two dependency-free, test-scoped built-ins by name:
+Testenix 0.3 provides two dependency-free, test-scoped built-ins by name:
 
 ```python
 from pathlib import Path
@@ -110,7 +110,7 @@ def worker_resource() -> Resource:
     return Resource()
 ```
 
-| Scope | Lifetime in Testenix 0.2 |
+| Scope | Lifetime in Testenix 0.3 |
 | --- | --- |
 | `test` | One instance for one concrete test attempt. |
 | `module` | Shared by normal tests from the module inside one worker. |

@@ -18,7 +18,7 @@ Windows: testenix pytest =========> pytest.console_main -> collector/plugins/exe
 ```
 
 The bridge is a CLI infrastructure adapter, not a native collection adapter. It does not emit
-Testenix events or construct a `RunResult` in version 0.2.
+Testenix events or construct a `RunResult` in version 0.3.
 
 The migration adapter is separate from that handoff. It statically converts a deliberately small
 pytest subset or generates SHA-pinned wrappers around the standard unittest protocol. Its
@@ -76,7 +76,7 @@ trusted manifest +-- roots/inventory/SHA-256 verify                             
 - migration analyzers depend on serializable migration contracts, while shadow execution and
   atomic publication remain application/infrastructure concerns.
 
-## Version 0.2 scope
+## Version 0.3 scope
 
 - explicit `@test` and `@fixture` authoring API, plus conventional `test_*` discovery;
 - sync functions, coroutines, generators, and async-generator fixture teardown;
@@ -99,7 +99,7 @@ trusted manifest +-- roots/inventory/SHA-256 verify                             
   wrappers, plus simple pytest classes.
 
 Remote workers, distributed storage, result caching, automatic quarantine, and a stable third-party
-plugin SDK are deliberately outside version 0.2.
+plugin SDK are deliberately outside version 0.3.
 
 ## Fixture scopes and process isolation
 
@@ -114,7 +114,7 @@ globals, and import-time lifecycle behavior. Function-scoped fixtures can be rec
 Because arbitrary dynamic calls and external effects cannot be proven safe, passing this policy is
 a caller trust decision; ineligible modules keep normal affinity.
 
-Scope therefore has the following concrete meaning in version 0.2:
+Scope therefore has the following concrete meaning in version 0.3:
 
 | Scope | Lifetime |
 | --- | --- |

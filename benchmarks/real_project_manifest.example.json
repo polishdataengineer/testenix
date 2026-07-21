@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "private-project",
-  "testenix_version": "0.2.1",
+  "testenix_version": "0.3.0",
   "expected_tests": 118,
   "expected_passed": 118,
   "warmups": 1,

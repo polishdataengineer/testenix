@@ -24,7 +24,7 @@ record throughput, mean, standard deviation, provenance, and raw samples. Pytest
 and its cache provider are disabled, pytest-xdist 3.8 is loaded explicitly with its default `load`
 distribution, and every tool runs from the generated suite directory so repository-level pytest
 configuration does not affect the comparison. Those historical records do not measure Testenix
-0.2.1.
+0.3.0.
 
 Schema-version 2 harness output additionally records the requested and resolved worker counts,
 balanced/dominant/single-module test distributions, default-history versus `--no-history`, the
@@ -120,7 +120,7 @@ Generate the current-version dimension sweeps from a clean checkout with:
 
 ```bash
 uv run --no-editable python benchmarks/run_scaling_matrix.py \
-  --output benchmarks/scaling_matrix_0_2_1.json
+  --output benchmarks/scaling_matrix_0_3_0.json
 ```
 
 For an unpublished smoke test only, add `--quick --allow-dirty`. A publishable matrix must retain
@@ -158,7 +158,7 @@ replacing the approved marketing baseline: their timing variance is outside this
 
 The checked-in baseline files are historical development evidence, not universal or current-version
 performance claims. See `docs/performance-analysis.md` for the large-suite results, optimization
-profile, memory notes, and native-code decision. A clean Testenix 0.2.1 scaling matrix, publishable
+profile, memory notes, and native-code decision. A clean Testenix 0.3.0 scaling matrix, publishable
 real-project suites, alternative pytest-xdist strategies, and cross-platform repetitions remain
 required before publishing broad comparative claims.
 

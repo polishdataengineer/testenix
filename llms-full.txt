@@ -168,12 +168,12 @@ The checked-in development baseline measured **Testenix 0.1.0**, not the current
 `testenix run` completed 100,000 generated no-op tests across 16 modules on one Apple M4 Pro and
 CPython 3.11 machine in a median 8.04 seconds, compared with 25.33 seconds for pytest and 21.30
 seconds for pytest-xdist. It used four workers, `--no-history`, and pytest-xdist's default `load`
-scheduler. These measurements do not apply to Testenix 0.2.1, a real project, the default-history
+scheduler. These measurements do not apply to Testenix 0.3.0, a real project, the default-history
 mode, or the delegated `testenix pytest` command.
 
 <div class="benchmark-caveat">
 This is historical synthetic evidence from one machine, not a promise that every project will be
-3.15× faster. No clean Testenix 0.2.1 scaling matrix is checked in yet. The benchmark page publishes
+3.15× faster. No clean Testenix 0.3.0 scaling matrix is checked in yet. The benchmark page publishes
 the raw samples, environment, variance, methodology, current matrix status, and limitations.
 </div>
 
@@ -651,7 +651,7 @@ with external effects.
 
 ## Pytest conversion contract
 
-The v0.2 converter supports the subset below:
+The converter subset introduced in v0.2 supports the behavior below:
 
 - module-level pytest-default `test*` functions and normal Python `assert` statements;
 - simple `Test*` classes with a fresh zero-argument instance per test method, including ordinary
@@ -1051,7 +1051,7 @@ issues instead of hanging the run.
 
 ## Built-in fixtures
 
-Testenix 0.2 provides two dependency-free, test-scoped built-ins by name:
+Testenix 0.3 provides two dependency-free, test-scoped built-ins by name:
 
 ```python
 from pathlib import Path
@@ -1097,7 +1097,7 @@ def worker_resource() -> Resource:
     return Resource()
 ```
 
-| Scope | Lifetime in Testenix 0.2 |
+| Scope | Lifetime in Testenix 0.3 |
 | --- | --- |
 | `test` | One instance for one concrete test attempt. |
 | `module` | Shared by normal tests from the module inside one worker. |
@@ -2052,10 +2052,10 @@ evidence for specific synthetic workloads, not a universal claim that Testenix i
 than pytest. `Testenix` in these results means the native `testenix run` engine. The
 `testenix pytest` compatibility bridge delegates to pytest and is not represented here.
 
-## Testenix 0.2.1 scaling matrix
+## Testenix 0.3.0 scaling matrix
 
 No current-version matrix is checked in yet. The historical results below must therefore not be
-described as Testenix 0.2.1 performance. The new provenance-gated harness covers
+described as Testenix 0.3.0 performance. The new provenance-gated harness covers
 100/500/1,000/3,000 tests, balanced/dominant/single-module layouts, 1/2/4/auto workers, and both
 default history and `--no-history`, plus explicit safe-module sharding. Its default design uses
 dimension sweeps; use
@@ -2067,7 +2067,7 @@ logical CPU count.
 
 ```console
 $ uv run --no-editable python benchmarks/run_scaling_matrix.py \
-    --output benchmarks/scaling_matrix_0_2_1.json
+    --output benchmarks/scaling_matrix_0_3_0.json
 ```
 
 The command refuses a dirty worktree or an installed Testenix version that differs from
@@ -2109,7 +2109,7 @@ sensitive argument indexes in `redact_arguments`.
 The checked-in `3.15×` figure is a Testenix 0.1.0 result for 100,000 generated no-op
 tests across 16 modules, four workers, disabled history (`--no-history`), and pytest-xdist's default
 `load` strategy. It is retained as transparent historical evidence; it is not a measurement of
-Testenix 0.2.1.
+Testenix 0.3.0.
 
 ![Historical Testenix 0.1.0 throughput ratios](https://polishdataengineer.github.io/testenix/_static/benchmark-speedup.svg)
 
@@ -2375,7 +2375,7 @@ record throughput, mean, standard deviation, provenance, and raw samples. Pytest
 and its cache provider are disabled, pytest-xdist 3.8 is loaded explicitly with its default `load`
 distribution, and every tool runs from the generated suite directory so repository-level pytest
 configuration does not affect the comparison. Those historical records do not measure Testenix
-0.2.1.
+0.3.0.
 
 Schema-version 2 harness output additionally records the requested and resolved worker counts,
 balanced/dominant/single-module test distributions, default-history versus `--no-history`, the
@@ -2471,7 +2471,7 @@ Generate the current-version dimension sweeps from a clean checkout with:
 
 ```bash
 uv run --no-editable python benchmarks/run_scaling_matrix.py \
-  --output benchmarks/scaling_matrix_0_2_1.json
+  --output benchmarks/scaling_matrix_0_3_0.json
 ```
 
 For an unpublished smoke test only, add `--quick --allow-dirty`. A publishable matrix must retain
@@ -2509,7 +2509,7 @@ replacing the approved marketing baseline: their timing variance is outside this
 
 The checked-in baseline files are historical development evidence, not universal or current-version
 performance claims. See `docs/performance-analysis.md` for the large-suite results, optimization
-profile, memory notes, and native-code decision. A clean Testenix 0.2.1 scaling matrix, publishable
+profile, memory notes, and native-code decision. A clean Testenix 0.3.0 scaling matrix, publishable
 real-project suites, alternative pytest-xdist strategies, and cross-platform repetitions remain
 required before publishing broad comparative claims.
 
@@ -2531,7 +2531,7 @@ Source: docs/performance-analysis.md
 ## Executive summary
 
 The checked-in headline numbers are a **historical Testenix 0.1.0 synthetic baseline**, not current
-Testenix 0.2.1 results. In the largest recorded comparison, 100,000 generated no-op tests were spread
+Testenix 0.3.0 results. In the largest recorded comparison, 100,000 generated no-op tests were spread
 evenly across 16 modules and run with four workers and `--no-history`. Testenix completed the suite
 in a median 8.038 seconds, pytest in 25.333 seconds, and pytest-xdist 3.8's default `load` scheduler
 in 21.300 seconds. Every command had to report the expected test count or the harness rejected the
@@ -2541,8 +2541,8 @@ samples ranged from 7.912 to 8.096 seconds.
 This is evidence for the tested workload and machine, not a universal claim about every Python
 project. Import-heavy suites, fixture-heavy suites, slow tests, failure output, default history,
 alternative pytest-xdist schedulers, different operating systems, and real repositories still need
-independent measurements. No clean Testenix 0.2.1 scaling matrix is checked in yet, so `3.15×` must
-not be presented as a 0.2.1 speedup.
+independent measurements. No clean Testenix 0.3.0 scaling matrix is checked in yet, so `3.15×` must
+not be presented as a 0.3.0 speedup.
 
 These results do not apply to `testenix pytest`. The compatibility command delegates to pytest and
 has pytest execution performance plus launcher and adapter overhead, which has not yet been
@@ -2593,7 +2593,7 @@ approximately 520 MiB on the same generated suite. These older macOS `time` figu
 the current baseline JSON and are process maxima, not aggregate memory across every xdist/Testenix
 child process. The console renderer changed substantially after these captures, and the historical
 harness did not record output byte counts. Current schema-version 2 runs do record stdout/stderr
-sizes, but a clean 0.2.1 matrix is still pending.
+sizes, but a clean 0.3.0 matrix is still pending.
 
 ### Migrated-suite measurements
 
@@ -2743,7 +2743,7 @@ Relevant upstream constraints are documented in the
 
 ## Next measurement gates
 
-- publish the clean Testenix 0.2.1 dimension-sweep matrix for 100/500/1,000/3,000 tests,
+- publish the clean Testenix 0.3.0 dimension-sweep matrix for 100/500/1,000/3,000 tests,
   balanced/dominant/single-module layouts, 1/2/4/adaptive-auto workers, and both history modes;
 - compare pytest-xdist `load`, `loadfile`, `loadscope`, and `worksteal` where each strategy is valid;
 - collection, execution, IPC-byte, process-start, CPU, and aggregate-memory telemetry;
@@ -2760,7 +2760,7 @@ Relevant upstream constraints are documented in the
 No universal “always faster than pytest” statement should be published until the current-version,
 real-project, and cross-platform gates pass. The supported claim today is historical and narrower:
 Testenix 0.1.0 was materially faster in the recorded native large passing-suite scenarios while
-retaining supervised isolation and complete results. Testenix 0.2.1 has no checked-in speedup claim
+retaining supervised isolation and complete results. Testenix 0.3.0 has no checked-in speedup claim
 yet.
 
 ---
@@ -2790,7 +2790,7 @@ Windows: testenix pytest =========> pytest.console_main -> collector/plugins/exe
 ```
 
 The bridge is a CLI infrastructure adapter, not a native collection adapter. It does not emit
-Testenix events or construct a `RunResult` in version 0.2.
+Testenix events or construct a `RunResult` in version 0.3.
 
 The migration adapter is separate from that handoff. It statically converts a deliberately small
 pytest subset or generates SHA-pinned wrappers around the standard unittest protocol. Its
@@ -2848,7 +2848,7 @@ trusted manifest +-- roots/inventory/SHA-256 verify                             
 - migration analyzers depend on serializable migration contracts, while shadow execution and
   atomic publication remain application/infrastructure concerns.
 
-## Version 0.2 scope
+## Version 0.3 scope
 
 - explicit `@test` and `@fixture` authoring API, plus conventional `test_*` discovery;
 - sync functions, coroutines, generators, and async-generator fixture teardown;
@@ -2871,7 +2871,7 @@ trusted manifest +-- roots/inventory/SHA-256 verify                             
   wrappers, plus simple pytest classes.
 
 Remote workers, distributed storage, result caching, automatic quarantine, and a stable third-party
-plugin SDK are deliberately outside version 0.2.
+plugin SDK are deliberately outside version 0.3.
 
 ## Fixture scopes and process isolation
 
@@ -2886,7 +2886,7 @@ globals, and import-time lifecycle behavior. Function-scoped fixtures can be rec
 Because arbitrary dynamic calls and external effects cannot be proven safe, passing this policy is
 a caller trust decision; ineligible modules keep normal affinity.
 
-Scope therefore has the following concrete meaning in version 0.2:
+Scope therefore has the following concrete meaning in version 0.3:
 
 | Scope | Lifetime |
 | --- | --- |
@@ -3013,6 +3013,8 @@ All notable changes will be documented in this file. The format follows Keep a C
 project intends to use Semantic Versioning once its public API reaches stability.
 
 ## [Unreleased]
+
+## [0.3.0] - 2026-07-21
 
 ### Added
 

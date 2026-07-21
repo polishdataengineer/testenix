@@ -119,10 +119,11 @@ rename, Testenix warns without pretending the already published output was rolle
 paths must be new, inside the project, and disjoint from both source and generated suites. There is
 no `--force` option, and old tests are never deleted or renamed.
 
-The converter stops on semantics it cannot preserve. The v0.2 pytest subset covers module
-functions, one static parametrization, simple local/adjacent-conftest fixtures, statically declared
-autouse fixtures, bare `@pytest.mark.asyncio` coroutine tests through fresh function-scoped loop
-wrappers, and simple pytest classes. Native `tmp_path` and a dependency-free `monkeypatch`
+The converter stops on semantics it cannot preserve. The pytest subset introduced in v0.2 covers
+module functions, one static parametrization, simple local/adjacent-conftest fixtures, statically
+declared autouse fixtures, bare `@pytest.mark.asyncio` coroutine tests through fresh
+function-scoped loop wrappers, and simple pytest classes. Native `tmp_path` and a dependency-free
+`monkeypatch`
 implementation cover the common `setattr` and `setenv` forms with automatic per-test rollback,
 including calls through statically provable module-local helpers. Complex class lifecycle, async
 fixtures, unmarked async tests, configured async loop scopes or debug mode, custom
@@ -337,7 +338,7 @@ test.
 
 ## Where Testenix is deliberately different
 
-The `testenix run` engine is not a native drop-in reimplementation of pytest. Its v0.2 value is a
+The `testenix run` engine is not a native drop-in reimplementation of pytest. Its v0.3 value is a
 smaller, coherent native stack: async tests and async fixtures need no plugin, parallel execution
 and duration-aware scheduling need no xdist, every retry remains visible, and a worker crash cannot
 silently erase tests that completed before it. The native runtime has no third-party dependencies.
@@ -368,19 +369,20 @@ can copy its own text or the complete project reference for an LLM.
 ## Benchmarks
 
 The checked-in `3.15x` result is a **historical Testenix 0.1.0 synthetic baseline**, not a Testenix
-0.2.1 measurement. On one M4 Pro/CPython 3.11 machine, native `testenix run` completed 100,000
+0.3.0 measurement. On one M4 Pro/CPython 3.11 machine, native `testenix run` completed 100,000
 generated no-op tests across 16 modules in a median 8.04 seconds, compared with 25.33 seconds for
 pytest and 21.30 seconds for pytest-xdist. The run used four workers, `--no-history`, pytest-xdist
 3.8's default `load` scheduler, one warm-up, and five counterbalanced measured rounds. It does not
 describe `testenix pytest`, which executes through pytest, or promise the same ratio for a real
 project.
 
-No Testenix 0.2.1 scaling result is checked in yet. The provenance-gated matrix harness covers
+No Testenix 0.3.0 scaling result is checked in yet. The provenance-gated matrix harness covers
 100/500/1,000/3,000 tests, balanced/dominant/single-module layouts, 1/2/4/auto workers, and both
 default history and `--no-history`, plus explicit safe-module sharding. Until that clean five-round
-matrix is published, the project does not claim a 0.2.1 speedup. A separate manifest harness can measure a private real project
-without copying its code, stdout, environment values, or absolute paths into the result. It marks a
-result publishable only when a current successful migration report proves exact per-test
+matrix is published, the project does not claim a 0.3.0 speedup. A separate manifest harness can
+measure a private real project without copying its code, stdout, environment values, or absolute
+paths into the result. It marks a result publishable only when a current successful migration
+report proves exact per-test
 inventory/outcome parity, complete source/generated Python-file inventories and hashes, and binds
 canonical pytest and Testenix commands to the migrated source/output roots. Without that report,
 the result is explicitly diagnostic-only. Publishable source roots must be directories so support
@@ -404,7 +406,7 @@ pytest-xdist, unittest, or real project suites.
 ```bash
 # current-version synthetic matrix; refuses dirty/version-mismatched publication input
 uv run --no-editable python benchmarks/run_scaling_matrix.py \
-  --output benchmarks/scaling_matrix_0_2_1.json
+  --output benchmarks/scaling_matrix_0_3_0.json
 
 # redaction-safe real-project comparison driven by an argument-array manifest
 cp benchmarks/real_project_manifest.example.json /tmp/testenix-project-benchmark.json
@@ -442,7 +444,7 @@ See the [generated results and chart](https://polishdataengineer.github.io/teste
   JSON-safe representation when a value itself is not serializable.
 - Synchronous test and fixture bodies run outside Testenix's internal asyncio loop. APIs restricted
   to Python's main thread, such as installing signal handlers, are not supported inside those
-  bodies in v0.2. Migrated pytest-asyncio wrappers are synchronous from Testenix's perspective and
+  bodies in v0.3. Migrated pytest-asyncio wrappers are synchronous from Testenix's perspective and
   therefore share this restriction while creating a fresh event loop for each test or case.
 - On every supported platform, an executable script that calls the programmatic
   `run()`/`run_async()` API must use the standard `if __name__ == "__main__":` multiprocessing
@@ -458,11 +460,11 @@ See the [generated results and chart](https://polishdataengineer.github.io/teste
   checks pass. Spread independent tests across modules or validate opt-in sharding, then run
   `testenix tune` before making a project-specific speed claim.
 - Test impact analysis, result caching, remote workers, and deep pytest-result aggregation are not
-  part of version 0.2.
+  part of version 0.3.
 
 ## Project status
 
-Testenix 0.2.1 is pre-1.0 software. The distribution, import package, CLI, configuration namespace,
+Testenix 0.3.0 is pre-1.0 software. The distribution, import package, CLI, configuration namespace,
 and state directory consistently use `testenix`. The project is licensed under MIT and releases
 are published to PyPI through Trusted Publishing.
 

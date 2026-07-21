@@ -91,7 +91,7 @@ with external effects.
 
 ## Pytest conversion contract
 
-The v0.2 converter supports the subset below:
+The converter subset introduced in v0.2 supports the behavior below:
 
 - module-level pytest-default `test*` functions and normal Python `assert` statements;
 - simple `Test*` classes with a fresh zero-argument instance per test method, including ordinary
