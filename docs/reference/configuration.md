@@ -13,6 +13,8 @@ workers = "auto"
 retries = 0
 # timeout = 10.0
 tags = []
+# shard_modules = true
+# manifest = ".testenix/collection.json"
 # json = "reports/testenix.json"
 # junit = "reports/junit.xml"
 history = ".testenix/history.sqlite3"
@@ -34,8 +36,15 @@ Files and directories used when no positional path is passed to `testenix run`.
 - Type: positive integer or `"auto"`
 - Default: `"auto"`
 
-`auto` uses Python's logical CPU count. An explicit number is recommended for reproducible CI and
-benchmark runs.
+`auto` is adaptive rather than equal to Python's logical CPU count. After collection and selection,
+Testenix caps concurrency by the available CPUs and the number of independently schedulable units.
+Reliable duration history feeds a worker-startup/makespan estimate; without enough history, a
+conservative cold-start cap avoids oversubscribing short suites. The smallest worker count within a
+narrow tolerance of the predicted best is selected.
+
+An explicit number is recommended for strict CI resource limits and publishable benchmark runs.
+Use `testenix tune` (or its `testenix benchmark` alias) to measure native candidates for this
+project, and `testenix tune --write` to persist its recommendation explicitly.
 
 ### `retries`
 
@@ -88,6 +97,40 @@ history = false
 
 The programmatic field is `history_path` and accepts a `pathlib.Path` or `None`.
 
+### `shard_modules`
+
+- Type: boolean
+- Default: `false`
+
+Allow eligible modules to be divided into finer per-test execution units. The static analyzer
+keeps module affinity when it sees module/session fixtures, mutation of obvious module-global
+state, or import-time lifecycle hazards. Function-scoped fixtures, including autouse fixtures, do
+not block sharding.
+
+This option is explicitly opt-in because static analysis cannot prove the absence of all dynamic
+side effects. Validate the project with and without sharding before enabling it in CI.
+
+### `manifest`
+
+- Type: filesystem path or `null`
+- Default: none
+
+Path to a trusted collection manifest generated explicitly with:
+
+```console
+$ testenix manifest tests --output .testenix/collection.json
+```
+
+On each run Testenix verifies the requested collection roots, selected test files, statically
+discoverable project-local Python import dependencies, and SHA-256 source digests. An exact match
+bypasses the collection-side imports; a stale
+but well-formed manifest falls back to normal supervised collection. Malformed JSON is rejected.
+Execution workers still import the modules they run. Test parameter names remain available for
+diagnostics, but their values are stored only as `<redacted>` to avoid persisting secrets obtained
+during collection. Regenerate the manifest when source files or dynamic collection inputs change.
+
+The programmatic field is `manifest_path` and accepts a `pathlib.Path` or `None`.
+
 ## Programmatic configuration
 
 ```python
@@ -101,6 +144,8 @@ config = TestenixConfig(
     retries=1,
     timeout=5.0,
     tags=("unit",),
+    shard_modules=True,
+    manifest_path=Path(".testenix/collection.json"),
     json_path=Path("reports/run.json"),
     history_path=None,
 )

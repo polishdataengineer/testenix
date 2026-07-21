@@ -16,7 +16,6 @@ import math
 import os
 import platform
 import re
-import signal
 import statistics
 import subprocess
 import sys
@@ -26,6 +25,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
+
+if __package__:
+    from benchmarks.process_control import run_bounded_process
+else:  # direct ``python benchmarks/run_migration_benchmark.py`` execution
+    from process_control import run_bounded_process
 
 ROOT = Path(__file__).resolve().parents[1]
 COMMAND_TIMEOUT_SECONDS = 900.0
@@ -193,65 +197,31 @@ def _snapshot_digest(snapshot: dict[str, str]) -> str:
     return digest.hexdigest()
 
 
-def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
-    if process.poll() is not None:
-        return
-    if os.name == "nt":
-        subprocess.run(
-            ("taskkill", "/PID", str(process.pid), "/T", "/F"),
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        return
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-        process.wait(timeout=2.0)
-    except (OSError, subprocess.TimeoutExpired):
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except OSError:
-            process.kill()
-
-
 def _run_process(
     command: tuple[str, ...],
     *,
     project: Path,
     environment: dict[str, str],
 ) -> ProcessOutcome:
-    options: dict[str, Any] = {}
-    if os.name == "nt":
-        options["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    else:
-        options["start_new_session"] = True
     started = time.perf_counter()
-    process = subprocess.Popen(
-        command,
-        cwd=project,
-        env=environment,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        **options,
-    )
     try:
-        stdout, stderr = process.communicate(timeout=COMMAND_TIMEOUT_SECONDS)
+        completed = run_bounded_process(
+            command,
+            cwd=project,
+            env=environment,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
     except subprocess.TimeoutExpired as error:
-        _terminate_process_tree(process)
-        stdout, stderr = process.communicate()
+        stdout = error.output or ""
+        stderr = error.stderr or ""
         raise RuntimeError(
             f"benchmark command timed out after {COMMAND_TIMEOUT_SECONDS:g}s: "
             f"{_display_command(command, project)}\nstdout:\n{stdout}\nstderr:\n{stderr}"
         ) from error
-    except BaseException:
-        _terminate_process_tree(process)
-        process.communicate()
-        raise
     return ProcessOutcome(
-        returncode=process.returncode,
-        stdout=stdout,
-        stderr=stderr,
+        returncode=completed.returncode,
+        stdout=completed.stdout,
+        stderr=completed.stderr,
         elapsed=time.perf_counter() - started,
     )
 

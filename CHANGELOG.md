@@ -5,6 +5,41 @@ project intends to use Semantic Versioning once its public API reaches stability
 
 ## [Unreleased]
 
+### Added
+
+- `testenix tune` and its `testenix benchmark` alias for fresh-process, counterbalanced,
+  history-disabled native worker-candidate measurements, native inventory/outcome validation,
+  JSON reports, bounded per-run process-tree deadlines, and explicit `--write` persistence of the
+  measured recommendation with project-source fingerprinting and optimistic byte-drift protection
+  immediately before an atomic configuration replacement.
+- Explicit `--shard-modules` / `shard_modules = true` support for splitting eligible modules into
+  finer execution units. Conservative static checks retain module affinity for module/session
+  fixtures, visible global mutation, and import-time lifecycle hazards, including eager calls in
+  assignments, decorators, function defaults, and class construction expressions.
+- Versioned trusted collection manifests generated with `testenix manifest ... --output FILE` and
+  consumed with `testenix run --manifest FILE` or `[tool.testenix].manifest`. Exact collection
+  roots, selected test files, statically discoverable project-local import dependencies, and SHA-256
+  digests are verified before collection imports are bypassed; stale manifests fall back to
+  supervised collection, and parameter values are redacted.
+- Synthetic scaling-matrix tooling for 100/500/1,000/3,000 tests and balanced, dominant, and
+  single-module layouts, plus a redaction-safe real-project benchmark harness.
+
+### Changed
+
+- `workers = "auto"` now selects adaptively from the actual execution-unit count, available CPUs,
+  duration-history coverage, predicted process-start cost, and makespan instead of equalling the
+  logical CPU count. Explicit integer worker settings remain unchanged.
+- Benchmark documentation labels the historical `3.15×` result with its Testenix 0.1.0 version,
+  four-worker configuration, 100,000-test/16-module synthetic workload, and `--no-history` mode;
+  it is not presented as a current-version or real-project claim.
+
+### Fixed
+
+- Safe-module analysis now fails closed for imported fixture providers, nested mutable containers,
+  mutable class state, and all import-time calls including nested `sys.path` mutations.
+- Benchmark and tuning timeouts use Windows Job Objects or POSIX root-session plus identity-tracked
+  descendant cleanup instead of allowing observed workers to contaminate later measurements.
+
 ## [0.2.1] - 2026-07-21
 
 ### Added

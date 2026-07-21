@@ -326,6 +326,18 @@ def test_lpt_scheduler_has_deterministic_unknown_duration_and_empty_shards() -> 
     assert [shard.estimated_duration for shard in plan] == [1.0, 1.0, 0.0]
 
 
+def test_lpt_scheduler_spreads_zero_duration_items_deterministically() -> None:
+    tests = tuple(_spec(name) for name in ("e", "d", "c", "b", "a"))
+    history = {test.id: 0.0 for test in tests}
+
+    plan = schedule_lpt(tests, 3, history)
+    reversed_plan = schedule_lpt(tuple(reversed(tests)), 3, history)
+
+    assert [shard.test_ids for shard in plan] == [("a", "d"), ("b", "e"), ("c",)]
+    assert [shard.estimated_duration for shard in plan] == [0.0, 0.0, 0.0]
+    assert plan == reversed_plan
+
+
 def test_history_uses_last_substantive_attempt_and_ignores_pure_infra(
     tmp_path: Path,
 ) -> None:

@@ -126,6 +126,8 @@ paths = ["tests"]
 workers = "auto"
 retries = 0
 history = ".testenix/history.sqlite3"
+# shard_modules = true
+# manifest = ".testenix/collection.json"
 # timeout = 10
 # json = "reports/testenix.json"
 # junit = "reports/junit.xml"
@@ -140,6 +142,33 @@ $ testenix run --workers 4 --retries 1 --json reports/result.json
 Use `--no-history` for a side-effect-free run. Duration history normally helps later runs schedule
 long tests earlier.
 
+`workers = "auto"` adapts to the selected suite instead of copying the logical CPU count. It is
+capped by the actual schedulable units and uses duration history when enough is available. Measure
+an explicit project setting with:
+
+```console
+$ testenix tune tests --warmups 1 --repeats 5
+$ testenix tune --write
+```
+
+`testenix benchmark` is an alias for `testenix tune`.
+
+Module affinity is the safe default. For a large module whose tests are known to be independent,
+`--shard-modules` opts eligible tests into finer scheduling after conservative static checks. Read
+[parallel execution](guides/parallelism.md) before enabling it.
+
+To avoid repeating collection imports on later unchanged runs, create and trust a source-hashed
+manifest explicitly:
+
+```console
+$ testenix manifest tests --output .testenix/collection.json
+$ testenix run tests --manifest .testenix/collection.json
+```
+
+Testenix verifies the complete file inventory and every SHA-256 before reuse. A stale manifest
+falls back to supervised collection rather than running a stale test selection. Parameter names
+remain visible in the artifact, but their values are redacted.
+
 ## Use it from Python
 
 The runner also exposes a typed API:
@@ -147,12 +176,20 @@ The runner also exposes a typed API:
 ```python
 from testenix import Status, TestenixConfig, run
 
-result = run("tests", TestenixConfig(workers=4, history_path=None))
-failed = [item.test.id for item in result.tests if item.status is not Status.PASS]
+
+def main() -> None:
+    result = run("tests", TestenixConfig(workers=4, history_path=None))
+    failed = [item.test.id for item in result.tests if item.status is not Status.PASS]
+    print(failed)
+
+
+if __name__ == "__main__":
+    main()
 ```
 
 Async applications can call `await testenix.run_async(...)`. Cancellation terminates active
-collection and execution process trees before control returns to the caller.
+collection and execution process trees before control returns to the caller. Executable scripts
+must place the top-level call behind the same `if __name__ == "__main__":` guard on every platform.
 
 ## Next steps
 

@@ -32,7 +32,8 @@ workload-specific and preserve all documented limitations.
 - installation and first-run instructions;
 - the pytest compatibility bridge, capability matrix, and migration boundary;
 - native tests, cases, tags, skips, expected failures, and fixtures;
-- parallelism, timeouts, retries, crash recovery, reports, and history;
+- adaptive parallelism, tuning, optional safety-checked module sharding, trusted collection
+  manifests, timeouts, retries, crash recovery, reports, and history;
 - CLI, configuration, and generated Python API reference;
 - architecture and roadmap;
 - benchmark results, raw-data links, methodology, and caveats.

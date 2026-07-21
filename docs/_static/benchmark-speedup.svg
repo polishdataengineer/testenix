@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="980" height="466" viewBox="0 0 980 466" role="img" aria-labelledby="title description">
-<title id="title">Preliminary Testenix benchmark throughput ratios</title>
-<desc id="description">Horizontal bars compare Testenix throughput with pytest and pytest-xdist for three checked-in synthetic benchmark scenarios.</desc>
+<title id="title">Historical Testenix 0.1.0 benchmark throughput ratios</title>
+<desc id="description">Horizontal bars compare historical Testenix 0.1.0 throughput with pytest and pytest-xdist for three checked-in synthetic benchmark scenarios using four workers and disabled Testenix history.</desc>
 <style>.title{font:700 22px system-ui,sans-serif;fill:#0f172a}.subtitle,.tick,.legend{font:13px system-ui,sans-serif;fill:#475569}.label{font:600 14px system-ui,sans-serif;fill:#1e293b}.value{font:700 13px system-ui,sans-serif;fill:#0f172a}.grid{stroke:#cbd5e1;stroke-width:1}</style>
 <rect width="980" height="100%" rx="16" fill="#ffffff"/>
-<text class="title" x="32" y="36">Synthetic benchmark throughput ratio</text>
-<text class="subtitle" x="32" y="60">Higher is better · 1× means equal throughput</text>
+<text class="title" x="32" y="36">Historical Testenix 0.1.0 synthetic ratios</text>
+<text class="subtitle" x="32" y="60">4 workers · --no-history · higher is better</text>
 <line class="grid" x1="285.0" y1="82" x2="285.0" y2="424"/>
 <text class="tick" x="285.0" y="78" text-anchor="middle">0×</text>
 <line class="grid" x1="440.0" y1="82" x2="440.0" y2="424"/>
@@ -36,5 +36,5 @@
 <text class="legend" x="273" y="381" text-anchor="end">vs pytest-xdist</text>
 <rect x="285" y="366" width="410.7" height="22" rx="5" fill="#7c3aed"/>
 <text class="value" x="703.7" y="382">2.65×</text>
-<text class="subtitle" x="32" y="450">Development baseline · Apple M4 Pro · CPython 3.11.14 · raw samples linked below</text>
+<text class="subtitle" x="32" y="450">Historical baseline · Apple M4 Pro · CPython 3.11.14 · raw samples linked below</text>
 </svg>

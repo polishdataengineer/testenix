@@ -71,15 +71,15 @@ for-llms
   <div class="metric-card"><strong>0</strong><span>dependencies in the native runtime</span></div>
   <div class="metric-card"><strong>12</strong><span>Python and OS combinations in CI</span></div>
   <div class="metric-card"><strong>3</strong><span>console, JSON, and JUnit reports</span></div>
-  <div class="metric-card"><strong>3.15×</strong><span>native <code>testenix run</code> on the 100k synthetic workload vs pytest</span></div>
+  <div class="metric-card"><strong>3.15×</strong><span>historical v0.1.0 result: 100k synthetic no-op tests, 4 workers, --no-history</span></div>
 </div>
 
 Testenix is deliberately built around a few strong guarantees:
 
 - **Async is native.** Coroutine tests and async-generator fixtures use the same model as
   synchronous code and do not require a plugin.
-- **Parallelism is part of the runner.** Module affinity, process isolation, and
-  duration-aware scheduling are designed together.
+- **Parallelism is part of the runner.** Adaptive worker selection, module affinity, optional
+  safety-checked sharding, process isolation, and duration-aware scheduling are designed together.
 - **Retries preserve evidence.** A failed attempt followed by a pass is `FLAKY`, never silently
   rewritten as a clean pass.
 - **Crashes cannot erase completed work.** Workers stream results as tests finish, and unfinished
@@ -139,20 +139,28 @@ $ python -m pip install testenix
 $ testenix run tests
 ```
 
+`workers = "auto"` adapts to the schedulable work instead of launching one process per CPU. Use
+`testenix tune` (also available as `testenix benchmark`) for a measured project recommendation.
+Import-heavy native suites can explicitly generate a source-hashed collection manifest, and large
+independent modules can opt into conservative `--shard-modules` scheduling. See
+[parallel execution](guides/parallelism/) for both trust boundaries.
+
 To evaluate unreleased source changes, install the current `main` branch with
 `python -m pip install "testenix @ git+https://github.com/polishdataengineer/testenix.git@main"`.
 
 ## Performance evidence, with context
 
-The checked-in development baseline measured native `testenix run` on 100,000 empty tests across
-16 generated modules on an Apple M4 Pro and CPython 3.11. Native Testenix completed that specific
-workload in a median 8.04 seconds, compared with 25.33 seconds for pytest and 21.30 seconds for
-pytest-xdist. These measurements do not apply to the delegated `testenix pytest` command.
+The checked-in development baseline measured **Testenix 0.1.0**, not the current release. Native
+`testenix run` completed 100,000 generated no-op tests across 16 modules on one Apple M4 Pro and
+CPython 3.11 machine in a median 8.04 seconds, compared with 25.33 seconds for pytest and 21.30
+seconds for pytest-xdist. It used four workers, `--no-history`, and pytest-xdist's default `load`
+scheduler. These measurements do not apply to Testenix 0.2.1, a real project, the default-history
+mode, or the delegated `testenix pytest` command.
 
 <div class="benchmark-caveat">
-This is a preliminary synthetic result from one machine, not a promise that every project will be
-3.15× faster. The benchmark page publishes the raw samples, environment, variance, methodology,
-and limitations so that the claim can be evaluated rather than taken on trust.
+This is historical synthetic evidence from one machine, not a promise that every project will be
+3.15× faster. No clean Testenix 0.2.1 scaling matrix is checked in yet. The benchmark page publishes
+the raw samples, environment, variance, methodology, current matrix status, and limitations.
 </div>
 
 [Inspect the benchmark data](benchmarks/results/) or

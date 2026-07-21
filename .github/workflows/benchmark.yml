@@ -32,6 +32,11 @@ on:
         required: true
         default: false
         type: boolean
+      scaling_matrix:
+        description: Run the 100/500/1000/3000 adaptive scaling curve and dimension sweeps
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -82,5 +87,41 @@ jobs:
         with:
           name: benchmark-${{ inputs.tests }}-tests-${{ github.run_id }}
           path: benchmark-result.json
+          if-no-files-found: error
+          retention-days: 30
+
+  scaling-matrix:
+    name: Scaling curve (100/500/1000/3000)
+    if: ${{ inputs.scaling_matrix }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      BENCHMARK_MODULES: ${{ inputs.modules }}
+      BENCHMARK_REPEATS: ${{ inputs.repeats }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.29"
+          python-version: "3.11"
+          enable-cache: false
+      - run: uv sync --locked --dev --no-editable
+      - name: Run scaling matrix
+        run: >-
+          uv run --no-editable python benchmarks/run_scaling_matrix.py
+          --output benchmark-scaling-matrix.json
+          --tests 100,500,1000,3000
+          --modules "$BENCHMARK_MODULES"
+          --workers 1,2,4,auto
+          --repeats "$BENCHMARK_REPEATS"
+          --warmups 1
+      - name: Upload scaling matrix
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: benchmark-scaling-matrix-${{ github.run_id }}
+          path: benchmark-scaling-matrix.json
           if-no-files-found: error
           retention-days: 30

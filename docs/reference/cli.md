@@ -7,13 +7,16 @@ testenix [-h] [--version]
 testenix [--config PYPROJECT] run [RUN_ARGS ...]
 testenix pytest [PYTEST_ARGS ...]
 testenix migrate FRAMEWORK PATH [PATH ...] [MIGRATION_ARGS ...]
+testenix [--config PYPROJECT] tune [PATH ...] [TUNING_ARGS ...]
+testenix [--config PYPROJECT] benchmark [PATH ...] [TUNING_ARGS ...]
+testenix manifest PATH [PATH ...] --output FILE
 ```
 
 | Option | Description |
 | --- | --- |
 | `-h`, `--help` | Show command help. |
 | `--version` | Print the installed Testenix version. |
-| `--config PATH` | Load `[tool.testenix]` for native `testenix run`. |
+| `--config PATH` | Load `[tool.testenix]` for native `run` and `tune`/`benchmark` commands. |
 
 ## `testenix run`
 
@@ -27,6 +30,8 @@ testenix run [PATH ...]
              [--json FILE]
              [--junit FILE]
              [--history FILE | --no-history]
+             [--shard-modules]
+             [--manifest FILE]
              [-q | -v | -vv]
              [--color {auto,always,never} | --no-color]
              [--show-skips]
@@ -36,7 +41,7 @@ testenix run [PATH ...]
 | Argument | Default | Description |
 | --- | --- | --- |
 | `PATH ...` | configured `paths`, otherwise `tests` | Files or directories to discover. |
-| `-w`, `--workers` | `auto` | Worker process count or logical CPU count. |
+| `-w`, `--workers` | `auto` | Positive worker count, or adaptive selection from schedulable units, history, startup cost, and CPU capacity. |
 | `--retries` | `0` | Additional attempts after a gating outcome. |
 | `--timeout` | none | Global hard deadline for every selected test. |
 | `-t`, `--tag` | none | Required tag; repeat for AND selection. |
@@ -44,6 +49,8 @@ testenix run [PATH ...]
 | `--junit` | none | Write a JUnit XML report. |
 | `--history` | `.testenix/history.sqlite3` | Override the duration-history database. |
 | `--no-history` | off | Disable reading and writing history. |
+| `--shard-modules` | off | Opt eligible modules into per-test execution units after conservative static safety checks. |
+| `--manifest FILE` | none | Reuse an explicitly generated, source-verified trusted collection manifest. |
 | `-q`, `--quiet` | off | Hide the run header and compact per-file table. Collection errors, failure details, and the final summary remain visible. |
 | `-v`, `--verbose` | off | Print one result row per test in the stable detailed format. Repeat for `-vv`. |
 | `-vv` | off | Add worker, attempt, and phase metadata, including captured output. |
@@ -59,6 +66,20 @@ collection/failure diagnostics, and a final summary. Console output is assembled
 order after execution completes; these modes do not promise live progress updates. Presentation
 flags change only terminal rendering, not selection, scheduling, result statuses, JSON, JUnit, or
 exit codes.
+
+`workers = auto` never means “start one process per logical CPU.” Testenix caps it by the number of
+units that can run independently. Reliable duration history feeds a makespan/startup-cost model;
+cold runs use a conservative cap. The final console and JSON results report the worker count
+actually used. An explicit integer remains useful for fixed CI resource limits and reproducible
+published benchmarks.
+
+`--shard-modules` is an explicit safety/performance trade-off. Modules with module/session
+fixtures, statically visible mutable global state, or import-time lifecycle hazards keep module
+affinity; eligible modules may be split. Static analysis cannot prove every dynamic side effect.
+
+`--manifest` accepts the versioned JSON produced by `testenix manifest`. Malformed input is a usage
+error. An otherwise valid manifest whose roots, complete Python-file inventory, or SHA-256 digests
+no longer match is treated as stale, and the run safely performs ordinary supervised collection.
 
 In `auto` color mode, Testenix requires a terminal, respects `NO_COLOR`, allows `FORCE_COLOR`, and
 disables styling for a truthy `CI` value or `TERM=dumb`. Explicit `always` or `never` takes
@@ -136,6 +157,80 @@ grouped by severity and code, with the first source location shown. Use `--repor
 worker setting. It is emitted only for `--check` or publication after static analysis succeeds,
 because dry-run and unsupported transactions never execute the parallel gate.
 
+## `testenix tune` / `testenix benchmark`
+
+```text
+testenix tune [PATH ...]
+              [--config PYPROJECT]
+              [--candidates N[,N...]]
+              [--warmups N]
+              [--repeats N]
+              [--pytest-source PATH] ...
+              [--json FILE|-]
+              [--shard-modules]
+              [--manifest FILE]
+              [--write]
+```
+
+`testenix benchmark` is an exact alias for `testenix tune`.
+
+| Argument | Default | Description |
+| --- | --- | --- |
+| `PATH ...` | configured `paths`, otherwise `tests` | Native Testenix suite to tune. |
+| `--candidates N[,N...]` | resource-aware 1/2/4 sweep | Positive worker counts to measure. Counts above the number of execution units are deduplicated at that limit; values above four require this explicit option. |
+| `--warmups N` | `1` | Unrecorded warmups for each native candidate and optional pytest source. |
+| `--repeats N` | `5` | Recorded samples for each candidate. Candidate order alternates between rounds. |
+| `--run-timeout SECONDS` | `300` | Deadline for each complete native or pytest suite run; cleanup uses a Windows Job Object or POSIX root-session plus identity-tracked descendants. |
+| `--pytest-source PATH` | none | Also time a corresponding pytest source path; repeat for multiple paths. |
+| `--json FILE\|-` | none | Write the complete tuning report to a new file, or standard output with `-`. |
+| `--shard-modules` / `--no-shard-modules` | configured value | Tune with explicit safe intra-module sharding or module affinity. |
+| `--manifest FILE` | configured value | Use one source-verified collection manifest for every native sample. |
+| `--write` | off | Persist the measured recommendation as `[tool.testenix].workers`. |
+
+The command measures fresh CLI processes with Testenix history disabled. A one-worker probe
+establishes the inventory and outcomes, and every native candidate must match them. To avoid
+persisting noise, it recommends the smallest worker count within a narrow tolerance of the best
+median. `--write` is the only configuration-mutating mode; normal tuning and adaptive auto do not
+edit configuration. A workers-only write is rejected when a transient sharding or manifest override
+differs from the loaded project configuration, or when that configuration file changes during the
+measurement, because the recommendation would not describe the persisted execution profile. The
+writer compares the pre-tuning bytes again immediately before an atomic replacement. Project
+Python/TOML sources, linked source directories, explicit suite files, and a trusted manifest are
+fingerprinted by content and file identity after every sample; observed drift discards the complete
+result. Run publishable tuning from an immutable checkout to exclude a writer racing the final
+filesystem operation; installed packages, non-source data, and other runtime inputs are also outside
+that fingerprint.
+
+The optional pytest row is useful for local orientation only when it represents the corresponding
+source suite. A public pytest/Testenix claim still needs equivalent inventories and outcomes,
+counterbalanced commands, environment/version provenance, and the complete
+[benchmarking contract](../benchmarking.md).
+
+## `testenix manifest`
+
+```text
+testenix manifest PATH [PATH ...] --output FILE
+```
+
+The command performs supervised native collection and creates a new deterministic trusted
+manifest. It records collection roots, the complete selected Python-source inventory and SHA-256
+fingerprints, collected tests and issues, and conservative module-sharding decisions. Test case
+parameter names are retained while their values are redacted, so environment-derived secrets are
+not copied into the trust artifact. `FILE` must
+not already exist; Testenix does not silently replace a previous trust artifact.
+
+Use it explicitly on later runs:
+
+```console
+$ testenix manifest tests --output .testenix/collection.json
+$ testenix run tests --manifest .testenix/collection.json
+```
+
+This can avoid importing every selected module once for collection and once again for execution.
+Execution workers still import the modules they run. Source verification cannot cover dynamic
+collection inputs such as environment variables or external services; regenerate the manifest
+when those inputs change.
+
 ## Examples
 
 ```console
@@ -146,6 +241,12 @@ $ testenix run --retries 1 --timeout 10
 $ testenix run -v --show-skips --durations 10
 $ testenix run --color never
 $ testenix run --json reports/run.json --junit reports/junit.xml
+$ testenix run tests --shard-modules
+$ testenix manifest tests --output .testenix/collection.json
+$ testenix run tests --manifest .testenix/collection.json
+$ testenix tune tests --candidates 1,2,4,8 --warmups 1 --repeats 5
+$ testenix benchmark tests --json reports/tuning.json
+$ testenix tune --write
 $ testenix --config config/pyproject.toml run
 $ testenix pytest -q --tb=short tests
 $ testenix migrate pytest tests --dry-run

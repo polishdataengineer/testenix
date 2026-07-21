@@ -10,6 +10,7 @@ import math
 import posixpath
 import re
 import sys
+import tomllib
 from dataclasses import dataclass, fields, is_dataclass
 from enum import Enum
 from html import escape
@@ -32,6 +33,8 @@ MIGRATION_BASELINES = (
     ROOT / "benchmarks" / "migration_baseline_unittest_3000.json",
     ROOT / "benchmarks" / "migration_baseline_unittest_3000_delay_1ms.json",
 )
+
+SCALING_MATRIX = ROOT / "benchmarks" / "scaling_matrix_0_2_1.json"
 
 LLM_DOCUMENTS = (
     ("Overview", Path("docs/index.md"), ""),
@@ -129,6 +132,111 @@ class MigrationBenchmark:
     @property
     def workload(self) -> str:
         return "no-op" if self.delay_ms == 0 else f"{self.delay_ms:g} ms body"
+
+
+def _project_version() -> str:
+    with (ROOT / "pyproject.toml").open("rb") as source:
+        return str(tomllib.load(source)["project"]["version"])
+
+
+def _historical_version(benchmarks: tuple[Benchmark, ...]) -> str:
+    versions = {
+        str(benchmark.provenance.get("versions", {}).get("testenix", "unknown"))
+        for benchmark in benchmarks
+    }
+    if len(versions) != 1:
+        raise ValueError("published historical baselines do not share one Testenix version")
+    return versions.pop()
+
+
+def _load_scaling_matrix(path: Path, *, expected_version: str) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    provenance = data.get("provenance", {})
+    design = data.get("design", {})
+    scenarios = data.get("scenarios")
+    if (
+        data.get("schema_version") != 1
+        or data.get("kind") != "testenix.scaling-matrix"
+        or provenance.get("dirty") is not False
+        or provenance.get("testenix_version") != expected_version
+        or provenance.get("pyproject_version") != expected_version
+        or not provenance.get("commit")
+        or not isinstance(scenarios, list)
+        or not scenarios
+        or int(design.get("repeats", 0)) < 5
+        or int(design.get("warmups", 0)) < 1
+    ):
+        raise ValueError(f"{path}: current-version scaling publication gates did not pass")
+
+    counts: set[int] = set()
+    workers: set[str] = set()
+    layouts: set[str] = set()
+    histories: set[str] = set()
+    sharding_modes: set[str] = set()
+    for entry in scenarios:
+        if not isinstance(entry, dict) or not isinstance(entry.get("id"), str):
+            raise ValueError(f"{path}: invalid scaling scenario entry")
+        result = entry.get("result")
+        if not isinstance(result, dict) or result.get("schema_version") != 2:
+            raise ValueError(f"{path}: invalid scaling scenario result")
+        scenario = result.get("scenario", {})
+        measurements = result.get("measurements", {})
+        result_provenance = result.get("provenance", {})
+        if (
+            result_provenance.get("dirty") is not False
+            or result_provenance.get("commit") != provenance["commit"]
+            or result_provenance.get("versions", {}).get("testenix") != expected_version
+            or int(scenario.get("repeats", 0)) != int(design["repeats"])
+            or int(scenario.get("warmups", -1)) != int(design["warmups"])
+            or scenario.get("xdist_strategy") != design.get("xdist_strategy")
+        ):
+            raise ValueError(f"{path}: scenario provenance/design mismatch in {entry['id']}")
+        counts.add(int(scenario["test_count"]))
+        workers.add(str(scenario["workers_requested"]))
+        layouts.add(str(scenario["module_layout"]))
+        histories.add(str(scenario["history_mode"]))
+        sharding_modes.add(str(scenario.get("sharding_mode", "disabled")))
+        for runner in ("pytest", "pytest_xdist", "testenix"):
+            measurement = measurements.get(runner, {})
+            samples = measurement.get("samples")
+            stdout_bytes = measurement.get("stdout_bytes")
+            stderr_bytes = measurement.get("stderr_bytes")
+            if (
+                not isinstance(samples, list)
+                or len(samples) != int(scenario["repeats"])
+                or any(float(sample) <= 0 for sample in samples)
+                or not isinstance(stdout_bytes, list)
+                or len(stdout_bytes) != len(samples)
+                or not isinstance(stderr_bytes, list)
+                or len(stderr_bytes) != len(samples)
+            ):
+                raise ValueError(f"{path}: invalid {runner} samples in {entry['id']}")
+        if scenario["workers_requested"] == "auto":
+            observed_workers = measurements["testenix"].get("observed_workers")
+            if (
+                not isinstance(observed_workers, list)
+                or len(observed_workers) != int(scenario["repeats"])
+                or any(
+                    isinstance(worker, bool) or not isinstance(worker, int) or worker < 1
+                    for worker in observed_workers
+                )
+            ):
+                raise ValueError(
+                    f"{path}: auto scenario {entry['id']} has no valid observed worker counts"
+                )
+    if not {100, 500, 1_000, 3_000}.issubset(counts):
+        raise ValueError(f"{path}: scaling counts are incomplete")
+    if not {"1", "2", "4", "auto"}.issubset(workers):
+        raise ValueError(f"{path}: worker coverage is incomplete")
+    if not {"balanced", "dominant", "single"}.issubset(layouts):
+        raise ValueError(f"{path}: module-layout coverage is incomplete")
+    if not {"disabled", "default"}.issubset(histories):
+        raise ValueError(f"{path}: history coverage is incomplete")
+    if not {"disabled", "safe"}.issubset(sharding_modes):
+        raise ValueError(f"{path}: safe-sharding coverage is incomplete")
+    return data
 
 
 def _load_benchmark(path: Path) -> Benchmark:
@@ -315,7 +423,9 @@ def _render_migration_results(benchmarks: tuple[MigrationBenchmark, ...]) -> str
 These separate measurements start with generated pytest or unittest sources, complete one safe
 copy-and-validate migration, and then compare recurring source-suite runs with recurring native
 Testenix runs. The migration transaction is a one-time cost shown separately; it is not included
-in either execution median.
+in either execution median. These records came from the pre-v0.2 source commit linked below; its
+distribution metadata still reported `0.1.0`. They are historical evidence, not measurements of
+the current release.
 
 {table_header}
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
@@ -336,10 +446,129 @@ therefore material, and none of these synthetic rows predicts a specific real pr
 """
 
 
+def _render_current_matrix(matrix: dict[str, Any] | None, *, current_version: str) -> str:
+    if matrix is None:
+        matrix_section = f"""## Testenix {current_version} scaling matrix
+
+No current-version matrix is checked in yet. The historical results below must therefore not be
+described as Testenix {current_version} performance. The new provenance-gated harness covers
+100/500/1,000/3,000 tests, balanced/dominant/single-module layouts, 1/2/4/auto workers, and both
+default history and `--no-history`, plus explicit safe-module sharding. Its default design uses
+dimension sweeps; use
+`--full-cross-product` only when the much larger run is intentional.
+
+`auto` is passed literally to Testenix and remains adaptive; observed Testenix worker counts are
+stored per sample. pytest-xdist resolves its side of an `auto` row separately to the machine's
+logical CPU count.
+
+```console
+$ uv run --no-editable python benchmarks/run_scaling_matrix.py \\
+    --output benchmarks/scaling_matrix_0_2_1.json
+```
+
+The command refuses a dirty worktree or an installed Testenix version that differs from
+`pyproject.toml`. `--allow-dirty` is available only for unpublished smoke runs. A matrix becomes
+publishable here only after five measured rounds, one warm-up, clean commit provenance, and full
+axis coverage pass the documentation generator's validation.
+"""
+    else:
+        rows: list[str] = []
+        for entry in matrix["scenarios"]:
+            result = entry["result"]
+            scenario = result["scenario"]
+            measurements = result["measurements"]
+            native = float(measurements["testenix"]["median"])
+            pytest = float(measurements["pytest"]["median"])
+            xdist = float(measurements["pytest_xdist"]["median"])
+            history = "default" if scenario["history_mode"] == "default" else "disabled"
+            sharding = str(scenario.get("sharding_mode", "disabled"))
+            workers = str(scenario["workers_requested"])
+            if workers == "auto":
+                observed = sorted(set(measurements["testenix"]["observed_workers"]))
+                workers = f"auto ({'/'.join(str(worker) for worker in observed)} observed)"
+            rows.append(
+                "| "
+                + " | ".join(
+                    (
+                        str(entry["id"]),
+                        f"{int(scenario['test_count']):,}",
+                        f"{int(scenario['test_modules']):,}",
+                        str(scenario["module_layout"]),
+                        workers,
+                        history,
+                        sharding,
+                        _seconds(native),
+                        _seconds(pytest),
+                        _seconds(xdist),
+                        f"{pytest / native:.2f}×",
+                    )
+                )
+                + " |"
+            )
+        commit = str(matrix["provenance"]["commit"])
+        matrix_section = f"""## Testenix {current_version} scaling matrix
+
+This current-version matrix passed the clean-worktree, version, sample-count, and axis-coverage
+publication gates. Ratios still apply only to the recorded environment and exact row.
+
+| Scenario | Tests | Mods | Layout | Workers | History | Shard | Native | pytest | xdist | ratio |
+| --- | ---: | ---: | --- | ---: | --- | --- | ---: | ---: | ---: | ---: |
+{chr(10).join(rows)}
+
+- Measured rounds: {matrix["design"]["repeats"]}; warmups: {matrix["design"]["warmups"]}
+- pytest-xdist strategy: `{matrix["design"]["xdist_strategy"]}`
+- Clean source commit: [`{commit}`]({REPOSITORY_URL}/commit/{commit})
+- [Raw JSON]({_raw_link_path(SCALING_MATRIX)})
+"""
+
+    return (
+        matrix_section
+        + """
+
+## Real-project harness
+
+The 118-test project used during v0.2 migration validation was a semantic parity gate, not a
+publishable benchmark: its release-note timings were single observations without a committed
+multi-round record. Use the redaction-safe manifest harness for a real repository:
+
+```console
+$ cp benchmarks/real_project_manifest.example.json /tmp/testenix-project-benchmark.json
+$ uv run --no-editable python benchmarks/run_project_benchmark.py \\
+    --project /absolute/path/to/project \\
+    --manifest /tmp/testenix-project-benchmark.json \\
+    --output /tmp/testenix-project-result.json
+```
+
+The manifest stores argument arrays, never shell fragments. The result omits stdout, stderr,
+environment values, absolute project paths, and private source. It records only timings, aggregate
+output sizes, optional tree fingerprints, and redacted Git provenance. A migrated-suite comparison
+must point the manifest at a successful migration report to become publication-eligible. The
+harness verifies the report's exact per-test inventory and outcomes, complete source and generated
+Python-file inventories, current hashes, and binds canonical `python -m pytest` /
+`python -m testenix run` commands to the report's source/output roots. Publishable source roots are
+directories so support files such as `conftest.py` are covered. Without the report the result is
+diagnostic-only. Commands are retained for
+reproducibility. Publishable commands put options before `--` and exact suite targets after it, so
+an option value cannot impersonate a migration root. Keep secrets in the environment or list
+sensitive argument indexes in `redact_arguments`.
+"""
+    )
+
+
+def _raw_link_path(path: Path) -> str:
+    relative = path.relative_to(ROOT).as_posix()
+    return f"{REPOSITORY_URL}/blob/main/{relative}"
+
+
 def _render_benchmark_results(
     benchmarks: tuple[Benchmark, ...],
     migration_benchmarks: tuple[MigrationBenchmark, ...],
+    scaling_matrix: dict[str, Any] | None,
+    *,
+    current_version: str,
 ) -> str:
+    historical_version = _historical_version(benchmarks)
+    xdist_version = benchmarks[0].provenance.get("versions", {}).get("pytest_xdist", "unknown")
     rows = []
     detail_sections = []
     for benchmark in benchmarks:
@@ -389,6 +618,8 @@ def _render_benchmark_results(
 {chr(10).join(runner_details)}
 - Measured rounds: {benchmark.repeats}; warmups: {benchmark.warmups}
 - Workers: {benchmark.workers}
+- Testenix history: disabled with `--no-history`
+- pytest-xdist strategy: default `load`
 {chr(10).join(provenance_details)}
 - [Raw JSON]({_raw_link(benchmark)})
 """
@@ -428,9 +659,18 @@ evidence for specific synthetic workloads, not a universal claim that Testenix i
 than pytest. `Testenix` in these results means the native `testenix run` engine. The
 `testenix pytest` compatibility bridge delegates to pytest and is not represented here.
 
-![Preliminary Testenix throughput ratios](../_static/benchmark-speedup.svg)
+{_render_current_matrix(scaling_matrix, current_version=current_version)}
 
-## Median wall-clock time
+## Historical Testenix {historical_version} synthetic baseline
+
+The checked-in `3.15×` figure is a Testenix {historical_version} result for 100,000 generated no-op
+tests across 16 modules, four workers, disabled history (`--no-history`), and pytest-xdist's default
+`load` strategy. It is retained as transparent historical evidence; it is not a measurement of
+Testenix {current_version}.
+
+![Historical Testenix {historical_version} throughput ratios](../_static/benchmark-speedup.svg)
+
+### Median wall-clock time
 
 Lower time is better. A speedup of `{benchmarks[0].speedup_vs_pytest:.2f}×` means pytest's median
 wall time was {benchmarks[0].speedup_vs_pytest:.2f} times the Testenix median for that exact
@@ -446,19 +686,24 @@ scenario.
 {publication_note}
 </div>
 
-## Environment
+### Environment and controls
 
 - CPU: {cpu_model} ({environment["cpu_count"]} logical CPUs)
 - Machine: `{environment["machine"]}`
 - Platform: `{environment["platform"]}`
 - Python: `{environment["python"]}`
+- Testenix: `{historical_version}`
+- Workers: four for Testenix and pytest-xdist
+- Testenix history: disabled with `--no-history`
+- pytest-xdist: version `{xdist_version}`,
+  default `load` distribution
 - Measurement: complete subprocess wall-clock time, including discovery, execution, aggregation,
   and console rendering
 - Correctness gate: every command had to exit successfully and report the expected test count
 
 {legacy_note}
 
-## Raw samples and variance
+### Raw samples and variance
 
 """
         + "\n".join(detail_sections)
@@ -467,9 +712,9 @@ scenario.
         + """
 ## Interpretation
 
-The checked-in results show that Testenix has low per-test overhead for large generated suites and
-that its built-in process model is competitive with both sequential pytest and pytest-xdist in
-those scenarios.
+The historical checked-in results show that Testenix 0.1.0 had low per-test overhead for the large
+generated suites above and was competitive with sequential pytest and pytest-xdist's default
+`load` strategy in those scenarios. They are not evidence for the current release.
 
 They do **not** yet answer how Testenix performs for import-heavy applications, complex fixture
 graphs, assertion failures, real repositories, or different operating systems. Pytest also has a
@@ -503,6 +748,7 @@ Review the [benchmarking contract](../benchmarking.md) before comparing or publi
 
 
 def _render_benchmark_svg(benchmarks: tuple[Benchmark, ...]) -> str:
+    historical_version = _historical_version(benchmarks)
     width = 980
     height = 130 + len(benchmarks) * 112
     plot_x = 285
@@ -514,9 +760,11 @@ def _render_benchmark_svg(benchmarks: tuple[Benchmark, ...]) -> str:
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
         'viewBox="0 0 980 '
         f'{height}" role="img" aria-labelledby="title description">',
-        '<title id="title">Preliminary Testenix benchmark throughput ratios</title>',
-        '<desc id="description">Horizontal bars compare Testenix throughput with pytest and '
-        "pytest-xdist for three checked-in synthetic benchmark scenarios.</desc>",
+        f'<title id="title">Historical Testenix {historical_version} '
+        "benchmark throughput ratios</title>",
+        '<desc id="description">Horizontal bars compare historical Testenix '
+        f"{historical_version} throughput with pytest and pytest-xdist for three checked-in "
+        "synthetic benchmark scenarios using four workers and disabled Testenix history.</desc>",
         "<style>"
         ".title{font:700 22px system-ui,sans-serif;fill:#0f172a}"
         ".subtitle,.tick,.legend{font:13px system-ui,sans-serif;fill:#475569}"
@@ -525,8 +773,9 @@ def _render_benchmark_svg(benchmarks: tuple[Benchmark, ...]) -> str:
         ".grid{stroke:#cbd5e1;stroke-width:1}"
         "</style>",
         '<rect width="980" height="100%" rx="16" fill="#ffffff"/>',
-        '<text class="title" x="32" y="36">Synthetic benchmark throughput ratio</text>',
-        '<text class="subtitle" x="32" y="60">Higher is better · 1× means equal throughput</text>',
+        f'<text class="title" x="32" y="36">Historical Testenix {historical_version} '
+        "synthetic ratios</text>",
+        '<text class="subtitle" x="32" y="60">4 workers · --no-history · higher is better</text>',
     ]
     for tick in range(axis_max + 1):
         x = plot_x + tick * scale
@@ -566,7 +815,7 @@ def _render_benchmark_svg(benchmarks: tuple[Benchmark, ...]) -> str:
     python_version = escape(str(environment["python"]))
     elements.append(
         f'<text class="subtitle" x="32" y="{height - 16}">'
-        f"Development baseline · {cpu_model} · CPython {python_version} · raw samples linked below"
+        f"Historical baseline · {cpu_model} · CPython {python_version} · raw samples linked below"
         "</text>"
     )
     elements.append("</svg>")
@@ -753,11 +1002,18 @@ def _render_llms_full(generated: dict[Path, str]) -> str:
 
 
 def _outputs() -> dict[Path, str]:
+    current_version = _project_version()
     benchmarks = tuple(_load_benchmark(path) for path in BASELINES)
     migration_benchmarks = tuple(_load_migration_benchmark(path) for path in MIGRATION_BASELINES)
+    scaling_matrix = _load_scaling_matrix(SCALING_MATRIX, expected_version=current_version)
     results_path = Path("docs/benchmarks/results.md")
     generated = {
-        results_path: _render_benchmark_results(benchmarks, migration_benchmarks),
+        results_path: _render_benchmark_results(
+            benchmarks,
+            migration_benchmarks,
+            scaling_matrix,
+            current_version=current_version,
+        ),
         Path("docs/_static/benchmark-speedup.svg"): _render_benchmark_svg(benchmarks),
     }
     llms_index = _render_llms_index()

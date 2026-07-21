@@ -197,10 +197,13 @@ those tests were published.
 ## Performance with thousands of migrated tests
 
 Migration unlocks the native scheduler, process supervision, async engine, retries, history, and
-Testenix reports. It does not guarantee that every converted suite is faster. Testenix keeps a
-normal module as one affinity unit so module-scoped fixtures are not duplicated. Consequently,
-3,000 tests in one source module still form one schedulable unit; 3,000 tests spread across enough
-independent modules can use multiple workers.
+Testenix reports. It does not guarantee that every converted suite is faster. By default Testenix
+keeps a normal module as one affinity unit so module-scoped fixtures are not duplicated.
+Consequently, 3,000 tests in one source module still form one schedulable unit; 3,000 tests spread
+across enough independent modules can use multiple workers. A project may later opt eligible native
+modules into `--shard-modules`, but only after validating the generated suite and the documented
+static-analysis trust boundary. Run `testenix tune` on the published native copy before fixing its
+CI worker count.
 
 The checked-in migration baseline used an Apple M4 Pro, CPython 3.11, 3,000 generated tests in 64
 modules, four native workers, one warm-up, and five measured rounds:

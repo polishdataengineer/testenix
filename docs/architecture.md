@@ -55,11 +55,11 @@ test outcomes. A retry never overwrites an earlier attempt, infrastructure failu
 from test failures, and setup/call/teardown are preserved as separate phases.
 
 ```text
-Authoring API -> supervised collection -> inert manifest -> affinity scheduler -> process workers
-                                                                  |          -> streamed attempts
-                                                                  +----------> append-only events
-                                                                              -> reducer
-                                                                              -> reports/history
+Authoring API -> supervised collection -------> inert manifest -> scheduler -> process workers
+                 ^                                  ^               |             -> streamed attempts
+                 |                                  |               +------------> append-only events
+trusted manifest +-- roots/inventory/SHA-256 verify                                -> reducer
+       exact match bypasses collection imports                                     -> reports/history
 ```
 
 ## Dependency rules
@@ -68,6 +68,9 @@ Authoring API -> supervised collection -> inert manifest -> affinity scheduler -
 - `api`, `discovery`, `fixtures`, and `executor` form the native engine.
 - `events`, `aggregate`, and `scheduler` remain engine-independent.
 - `runner` is the application service connecting the native engine with execution policy.
+- `tuning` models adaptive worker selection and runs explicit project-local candidate measurements.
+- `sharding` contains fail-closed static module decisions and the versioned trusted-manifest
+  serialization/verification boundary.
 - reporters and storage consume completed domain results or versioned events.
 - optional compatibility adapters stay at the CLI boundary; the native core never imports pytest.
 - migration analyzers depend on serializable migration contracts, while shadow execution and
@@ -81,6 +84,10 @@ Authoring API -> supervised collection -> inert manifest -> affinity scheduler -
 - fixture scopes: test, module, session, with broader scopes currently bounded by a worker shard;
 - sequential and local process execution;
 - deterministic scheduling based on historical durations;
+- adaptive `workers = "auto"` capped by real execution units, history-informed predicted makespan,
+  process-start cost, and CPU capacity;
+- explicit project-local worker tuning, conservative opt-in intra-module sharding, and an
+  explicitly generated source-verified collection manifest;
 - append-only JSONL events and a pure reducer;
 - console, JSON, and JUnit output plus local SQLite duration history;
 - retries represented as immutable attempts and finalized as `FLAKY` when appropriate;
@@ -96,10 +103,16 @@ plugin SDK are deliberately outside version 0.2.
 
 ## Fixture scopes and process isolation
 
-The scheduler treats every normal test module as one affinity unit and never splits that unit
-between parallel shared workers. Multiple modules assigned to one shard execute in one persistent
-process and fixture runtime. A test with an explicit timeout (including a global timeout applied at
-selection) is instead a single-test isolation unit with a hard process deadline.
+By default, the scheduler treats every normal test module as one affinity unit and never splits
+that unit between parallel shared workers. Multiple modules assigned to one shard execute in one
+persistent process and fixture runtime. A test with an explicit timeout (including a global timeout
+applied at selection) is instead a single-test isolation unit with a hard process deadline.
+
+An explicit intra-module sharding policy can turn tests in an eligible module into finer units.
+The static analysis fails closed for module/session fixtures, writes or obvious mutations of module
+globals, and import-time lifecycle behavior. Function-scoped fixtures can be recreated per worker.
+Because arbitrary dynamic calls and external effects cannot be proven safe, passing this policy is
+a caller trust decision; ineligible modules keep normal affinity.
 
 Scope therefore has the following concrete meaning in version 0.2:
 
@@ -132,6 +145,18 @@ Collection itself uses the same spawn-based supervisor and returns only a JSON-s
 top-level import crash or deadline becomes a `CollectionIssue`, so user import code cannot exit or
 indefinitely block the coordinator. Timed execution units send a ready handshake after rediscovery;
 the test deadline therefore does not include interpreter startup or module import.
+
+A caller may instead supply a `TrustedCollectionManifest` created by an earlier explicit
+collection. Before using it, Testenix enumerates the current roots and verifies the complete file
+set and every SHA-256 digest. An exact match bypasses collection imports; a stale manifest falls
+back to the supervised collector. Malformed serialized input is rejected at the adapter boundary.
+Manifest parameter values are redacted at creation and serialization; only their names remain.
+The manifest also carries prior sharding decisions so collection and scheduling agree. A module
+using a fixture provider from outside its fingerprinted source fails closed to module affinity.
+This removes
+one module import per unchanged run, not the execution-worker import needed to reconstruct Python
+objects. Inputs to dynamic collection beyond fingerprinted source bytes remain the producer's trust
+responsibility.
 
 Workers normally create a separate POSIX process session (or use recursive tree termination on
 Windows). During migration validation they remain in the validator's process group so an outer
