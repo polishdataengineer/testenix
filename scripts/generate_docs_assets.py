@@ -592,14 +592,24 @@ def _public_api_snapshot() -> str:
     for name in testenix.__all__:
         value = getattr(testenix, name)
         sections.extend((f"## `testenix.{name}`", ""))
-        try:
-            signature = inspect.signature(value)
-        except (TypeError, ValueError):
-            signature = None
+        is_enum = inspect.isclass(value) and issubclass(value, Enum)
+        if is_enum:
+            # EnumMeta exposes a different introspected signature across supported
+            # Python versions. An enum's stable public constructor is its value.
+            signature = inspect.Signature(
+                parameters=(
+                    inspect.Parameter("value", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+                )
+            )
+        else:
+            try:
+                signature = inspect.signature(value)
+            except (TypeError, ValueError):
+                signature = None
         if signature is not None:
             sections.extend(("```text", f"{name}{signature}", "```", ""))
 
-        if inspect.isclass(value) and issubclass(value, Enum):
+        if is_enum:
             members = ", ".join(f"{item.name}={item.value!r}" for item in value)
             sections.extend((f"Values: {members}", ""))
         elif inspect.isclass(value) and is_dataclass(value):

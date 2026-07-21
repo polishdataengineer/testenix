@@ -2704,7 +2704,7 @@ Complete audit record for a migration attempt.
 ## `testenix.MigrationStatus`
 
 ```text
-MigrationStatus(*values)
+MigrationStatus(value)
 ```
 
 Values: ANALYZED='analyzed', VALIDATED='validated', PUBLISHED='published', UNSUPPORTED='unsupported', VALIDATION_FAILED='validation_failed', SAFETY_ERROR='safety_error'
@@ -2753,7 +2753,7 @@ RunResult(run_id: 'str', tests: 'tuple[TestResult, ...]', collection_issues: 'tu
 ## `testenix.Scope`
 
 ```text
-Scope(*values)
+Scope(value)
 ```
 
 Values: TEST='test', MODULE='module', SESSION='session'
@@ -2763,7 +2763,7 @@ Lifetime of a fixture instance.
 ## `testenix.Status`
 
 ```text
-Status(*values)
+Status(value)
 ```
 
 Values: PASS='pass', FAIL='fail', ERROR_SETUP='error_setup', ERROR_TEARDOWN='error_teardown', SKIP='skip', XFAIL='xfail', XPASS='xpass', TIMEOUT='timeout', CRASH='crash', INFRA_ERROR='infra_error', CANCELLED='cancelled', NOT_RUN='not_run', FLAKY='flaky', CACHED_PASS='cached_pass'
