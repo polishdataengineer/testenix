@@ -460,6 +460,8 @@ junit = "must-not-be-written.xml"
 def test_tuning_subprocess_timeout_terminates_its_process_group(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    posix_signals = SimpleNamespace(SIGTERM=15, SIGKILL=9)
+
     class FakeProcess:
         pid = 4242
 
@@ -498,6 +500,7 @@ def test_tuning_subprocess_timeout_terminates_its_process_group(
             return {5001: "worker-a", 5000: "worker-b"}
 
     monkeypatch.setattr(tuning_module.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(tuning_module, "signal", posix_signals)
     monkeypatch.setattr(tuning_module, "_PosixTreeTracker", FakeTracker)
     monkeypatch.setattr(tuning_module, "_posix_descendant_pids", lambda pid: (5001, 5000))
     monkeypatch.setattr(
@@ -529,8 +532,8 @@ def test_tuning_subprocess_timeout_terminates_its_process_group(
 
     assert popen_options["start_new_session"] is True
     assert killed_groups == [
-        (4242, tuning_module.signal.SIGTERM),
-        (4242, tuning_module.signal.SIGKILL),
+        (4242, posix_signals.SIGTERM),
+        (4242, posix_signals.SIGKILL),
     ]
     assert killed_processes == []
 
@@ -565,7 +568,7 @@ def test_posix_cleanup_never_signals_a_recycled_descendant_or_root_group(
     tuning_module._posix_signal_tree(
         4242,
         {5001: "old-process"},
-        tuning_module.signal.SIGKILL,
+        tuning_module.signal.SIGTERM,
         root_group_owned=False,
     )
 

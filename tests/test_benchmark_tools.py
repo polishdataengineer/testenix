@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -169,13 +170,14 @@ def test_bounded_process_removes_detached_descendants_after_timeout(tmp_path: Pa
 
 def test_bounded_process_tracks_detached_child_before_leader_exits(tmp_path: Path) -> None:
     ready = tmp_path / "child-ready"
+    leader_finished = tmp_path / "leader-finished"
     marker = tmp_path / "orphan-finished"
     child_code = (
         "import os, pathlib, sys, time\n"
         "if os.name == 'posix':\n"
         "    os.setsid()\n"
         "pathlib.Path(sys.argv[1]).write_text('ready', encoding='utf-8')\n"
-        "time.sleep(0.8)\n"
+        "time.sleep(1.5)\n"
         "pathlib.Path(sys.argv[2]).write_text('orphan', encoding='utf-8')\n"
     )
     parent_code = (
@@ -185,7 +187,11 @@ def test_bounded_process_tracks_detached_child_before_leader_exits(tmp_path: Pat
         "deadline = time.monotonic() + 2\n"
         "while not ready.exists() and time.monotonic() < deadline:\n"
         "    time.sleep(0.005)\n"
-        "time.sleep(0.05)\n"
+        # Keep the leader alive for many 20 ms tracker intervals. The previous
+        # 50 ms window made this a scheduler-latency assertion on loaded macOS
+        # CI rather than a process-tree cleanup regression.
+        "time.sleep(0.3)\n"
+        f"pathlib.Path({str(leader_finished)!r}).write_text('finished', encoding='utf-8')\n"
     )
 
     with pytest.raises(subprocess.TimeoutExpired):
@@ -193,11 +199,14 @@ def test_bounded_process_tracks_detached_child_before_leader_exits(tmp_path: Pat
             (sys.executable, "-c", parent_code),
             cwd=tmp_path,
             env=os.environ,
-            timeout=0.3,
+            timeout=0.75,
         )
 
     assert ready.exists()
-    time.sleep(1.0)
+    # Prove the leader really exited before the timeout; the test still covers
+    # cleanup of an already orphaned, session-detached descendant.
+    assert leader_finished.exists()
+    time.sleep(1.6)
     assert not marker.exists()
 
 
@@ -258,15 +267,20 @@ def test_posix_cleanup_does_not_signal_an_unowned_recycled_root_group(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     signalled: list[int] = []
-    monkeypatch.setattr(process_control.os, "getpgrp", lambda: 100)
     monkeypatch.setattr(
-        process_control.os, "killpg", lambda group, _signal: signalled.append(group)
+        process_control,
+        "os",
+        SimpleNamespace(
+            getpgrp=lambda: 100,
+            getpgid=lambda pid: pytest.fail(f"unexpected POSIX PGID lookup for {pid}"),
+            killpg=lambda group, _signal: signalled.append(group),
+        ),
     )
 
     process_control._posix_signal_tree(
         90_001,
         {},
-        process_control.signal.SIGKILL,
+        process_control.signal.SIGTERM,
         root_group_owned=False,
     )
 
