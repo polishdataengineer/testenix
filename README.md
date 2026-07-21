@@ -38,7 +38,8 @@ If a supported pytest (`>=8.3,<10`) is already installed in the same environment
 `testenix` package is sufficient.
 
 Testenix requires Python 3.11 or newer. The project is currently an alpha; pin the version before
-using it in CI. Until the first PyPI release is visible, use the GitHub installation below.
+using it in CI. Use the GitHub installation below only when you intentionally want unreleased
+changes from the current development branch.
 
 To try the current checkout before publication:
 
@@ -61,12 +62,14 @@ python -m pip install "testenix[pytest] @ git+https://github.com/polishdataengin
 Yes. Testenix provides a transparent compatibility bridge for existing pytest projects:
 
 ```bash
-testenix pytest -q tests
+testenix pytest -q --tb=short tests
 ```
 
 Everything after `testenix pytest` is forwarded unchanged to the same interpreter as
 `python -m pytest`. This preserves pytest collection, `conftest.py`, fixtures, parametrization,
 markers, assertion rewriting, plugins, configuration, output, node IDs, and exit codes.
+Consequently, output produced by `uv run pytest tests` or `testenix pytest ...` is pytest's UI,
+not the native Testenix console reporter.
 
 ```bash
 testenix pytest tests/test_api.py::test_health -k smoke --maxfail=1
@@ -164,6 +167,29 @@ Run it with:
 testenix run tests
 ```
 
+The native command uses a compact, file-level report by default and still prints complete failure
+details and a final summary. A typical failing run looks like this (the run ID and timings vary):
+
+```console
+$ testenix run tests
+Testenix  |  4 tests  |  2 files  |  2 workers
+
+PASS  tests/test_multiplication.py                  2 passed           [8ms]
+FAIL  tests/test_checkout.py                        1 passed, 1 failed [12ms]
+
+Problems (1)
+FAIL      tests/test_checkout.py::test_rejects_expired_card
+          attempt 1, call: expected status 402, got 200
+
+4 tests, 3 passed, 1 failed in 0.084s
+```
+
+Use `-q` to hide the header and file table while retaining collection errors, failure details, and
+the final summary. `-v` prints one result row per test; `-vv` also exposes worker, attempt, and
+phase metadata. `--show-skips` includes skip and expected-failure reasons, `--durations N` lists
+the `N` slowest tests (`--durations 0` lists all), and `--color auto|always|never` controls ANSI
+styling.
+
 Plain `test_*` functions are collected without `@test`; the decorator is useful for descriptions,
 tags, and per-test timeouts.
 
@@ -184,11 +210,14 @@ Command-line options override this table:
 ```text
 testenix run [PATH ...] [--workers auto|N] [--retries N] [--timeout SECONDS]
                     [--tag TAG ...] [--json FILE] [--junit FILE]
-                    [--history FILE | --no-history]
+                    [--history FILE | --no-history] [-q | -v | -vv]
+                    [--color auto|always|never | --no-color]
+                    [--show-skips] [--durations N]
 ```
 
 Repeated `--tag` options use AND semantics: a selected test must contain every requested tag.
-The console report is always printed. JSON preserves the complete run/test/attempt/phase model,
+The console report is always printed after execution; it is deterministic output, not a live
+progress display. JSON preserves the complete run/test/attempt/phase model,
 JUnit targets CI systems, and SQLite history supplies duration estimates to later runs. History is
 enabled at `.testenix/history.sqlite3` by default; use `--no-history` for a side-effect-free run.
 

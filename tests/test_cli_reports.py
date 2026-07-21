@@ -314,6 +314,140 @@ def test_cli_applies_overrides_and_writes_all_artifacts(
     assert "PASS" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize(
+    ("reporter_arguments", "expected"),
+    [
+        ((), (0, "auto", False, None)),
+        (("-q",), (-1, "auto", False, None)),
+        (("--quiet",), (-1, "auto", False, None)),
+        (("-v",), (1, "auto", False, None)),
+        (("-vv",), (2, "auto", False, None)),
+        (("-vvv",), (2, "auto", False, None)),
+        (("--verbose", "--verbose"), (2, "auto", False, None)),
+        (("--color", "always"), (0, "always", False, None)),
+        (("--color", "never"), (0, "never", False, None)),
+        (("--no-color",), (0, "never", False, None)),
+        (("--show-skips", "--durations", "0"), (0, "auto", True, 0)),
+        (("--durations", "7"), (0, "auto", False, 7)),
+    ],
+)
+def test_run_cli_maps_console_reporter_options(
+    reporter_arguments: tuple[str, ...],
+    expected: tuple[int, str, bool, int | None],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = _run_result(
+        _test_result(
+            "suite::first",
+            path="tests/test_suite.py",
+            line=1,
+            status=Status.PASS,
+            duration=0.1,
+        ),
+        _test_result(
+            "suite::second",
+            path="tests/test_suite.py",
+            line=2,
+            status=Status.PASS,
+            duration=0.2,
+        ),
+    )
+    captured: dict[str, object] = {}
+
+    class RecordingConsoleReporter:
+        def __init__(
+            self,
+            *,
+            verbosity: int,
+            color: str,
+            show_skips: bool,
+            durations: int | None,
+            workers: int,
+        ) -> None:
+            captured["options"] = (verbosity, color, show_skips, durations)
+            captured["workers"] = workers
+
+        def write(self, result: RunResult) -> None:
+            captured["result"] = result
+
+    monkeypatch.setattr("testenix.cli._call_runner", lambda paths, config: run)
+    monkeypatch.setattr("testenix.cli.ConsoleReporter", RecordingConsoleReporter)
+
+    exit_code = main(["run", "--workers", "8", *reporter_arguments, "tests"])
+
+    assert exit_code == 0
+    assert captured == {
+        "options": expected,
+        "workers": 1,
+        "result": run,
+    }
+
+
+def test_run_cli_reports_zero_workers_for_an_empty_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = _run_result()
+    captured: dict[str, object] = {}
+
+    class RecordingConsoleReporter:
+        def __init__(self, **options: object) -> None:
+            captured.update(options)
+
+        def write(self, result: RunResult) -> None:
+            captured["result"] = result
+
+    monkeypatch.setattr("testenix.cli._call_runner", lambda paths, config: run)
+    monkeypatch.setattr("testenix.cli.ConsoleReporter", RecordingConsoleReporter)
+
+    assert main(["run", "--workers", "8", "tests"]) == 0
+    assert captured["workers"] == 0
+    assert captured["result"] is run
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ("-q", "-v"),
+        ("--quiet", "--verbose"),
+        ("--color", "always", "--no-color"),
+        ("--durations", "-1"),
+        ("--durations", "not-an-integer"),
+    ],
+)
+def test_run_cli_rejects_conflicting_or_invalid_console_options(
+    arguments: tuple[str, ...],
+) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        main(["run", *arguments])
+
+    assert exit_info.value.code == 2
+
+
+def test_pytest_bridge_forwards_native_console_flag_names_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[tuple[str, ...]] = []
+
+    def fake_pytest(arguments: tuple[str, ...]) -> int:
+        captured.append(arguments)
+        return 5
+
+    monkeypatch.setattr("testenix.cli._call_pytest", fake_pytest)
+    forwarded = (
+        "-q",
+        "-vv",
+        "--color",
+        "always",
+        "--no-color",
+        "--show-skips",
+        "--durations",
+        "0",
+    )
+
+    assert main(["pytest", *forwarded]) == 5
+    assert captured == [forwarded]
+
+
 def test_run_help_describes_configured_default_paths(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -323,3 +457,4 @@ def test_run_help_describes_configured_default_paths(
     assert exit_info.value.code == 0
     help_text = " ".join(capsys.readouterr().out.split())
     assert "default: [tool.testenix].paths, otherwise tests" in help_text
+    assert "show failures and the final summary only" in help_text

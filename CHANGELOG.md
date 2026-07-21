@@ -5,6 +5,19 @@ project intends to use Semantic Versioning once its public API reaches stability
 
 ## [Unreleased]
 
+### Added
+
+- Native console controls for quiet output, one- or two-level verbosity, skipped/expected-failure
+  reasons, slow-test duration lists, and explicit automatic/forced/disabled ANSI color handling.
+
+### Changed
+
+- `testenix run` now defaults to a compact per-file report while retaining complete collection and
+  failure diagnostics plus the final summary. Console rendering remains deterministic and is
+  emitted after execution rather than presented as live progress.
+- Documentation now distinguishes native Testenix rendering from the unchanged pytest output
+  produced by the transparent `testenix pytest` compatibility bridge.
+
 ## [0.2.0] - 2026-07-20
 
 ### Added
