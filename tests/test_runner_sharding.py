@@ -312,7 +312,7 @@ def test_auto_workers_follow_real_units_before_and_after_opt_in_sharding(tmp_pat
 
     assert affinity.workers_used == 1
     assert sharded.workers_used == min(4, os.cpu_count() or 1, 12)
-    assert sharded.shardable_paths == (str(path),)
+    assert sharded.shardable_paths == (path.as_posix(),)
 
 
 def test_function_autouse_fixture_does_not_block_opt_in_sharding(tmp_path: Path) -> None:
