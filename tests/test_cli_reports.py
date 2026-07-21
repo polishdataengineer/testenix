@@ -114,6 +114,8 @@ tags = ["unit", "fast", "unit"]
 json = "reports/results.json"
 junit = "reports/junit.xml"
 history = false
+shard_modules = true
+manifest = ".testenix/collection.json"
 """,
         encoding="utf-8",
     )
@@ -129,6 +131,8 @@ history = false
         json_path=Path("reports/results.json"),
         junit_path=Path("reports/junit.xml"),
         history_path=None,
+        shard_modules=True,
+        manifest_path=Path(".testenix/collection.json"),
     )
     with pytest.raises(ConfigError, match="workers"):
         TestenixConfig(workers=0)
@@ -298,6 +302,7 @@ def test_cli_applies_overrides_and_writes_all_artifacts(
             str(junit_path),
             "--history",
             str(history_path),
+            "--shard-modules",
             "tests/unit",
         ]
     )
@@ -307,6 +312,7 @@ def test_cli_applies_overrides_and_writes_all_artifacts(
     config = captured["config"]
     assert isinstance(config, TestenixConfig)
     assert (config.workers, config.retries, config.timeout, config.tags) == (3, 1, 2.0, ("unit",))
+    assert config.shard_modules is True
     assert json_path.exists()
     assert junit_path.exists()
     with HistoryStore(history_path) as history:

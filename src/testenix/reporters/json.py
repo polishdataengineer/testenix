@@ -52,8 +52,10 @@ def run_result_to_dict(run: RunResult) -> dict[str, Any]:
         "format": RESULT_FORMAT,
         "run_id": run.run_id,
         "schema_version": EVENT_SCHEMA_VERSION,
+        "shardable_paths": list(run.shardable_paths),
         "started_at": run.started_at,
         "tests": [_test_to_dict(result) for result in sorted(run.tests, key=_test_sort_key)],
+        "workers_used": run.workers_used,
     }
 
 

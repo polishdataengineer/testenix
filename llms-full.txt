@@ -85,15 +85,15 @@ for-llms
   <div class="metric-card"><strong>0</strong><span>dependencies in the native runtime</span></div>
   <div class="metric-card"><strong>12</strong><span>Python and OS combinations in CI</span></div>
   <div class="metric-card"><strong>3</strong><span>console, JSON, and JUnit reports</span></div>
-  <div class="metric-card"><strong>3.15×</strong><span>native <code>testenix run</code> on the 100k synthetic workload vs pytest</span></div>
+  <div class="metric-card"><strong>3.15×</strong><span>historical v0.1.0 result: 100k synthetic no-op tests, 4 workers, --no-history</span></div>
 </div>
 
 Testenix is deliberately built around a few strong guarantees:
 
 - **Async is native.** Coroutine tests and async-generator fixtures use the same model as
   synchronous code and do not require a plugin.
-- **Parallelism is part of the runner.** Module affinity, process isolation, and
-  duration-aware scheduling are designed together.
+- **Parallelism is part of the runner.** Adaptive worker selection, module affinity, optional
+  safety-checked sharding, process isolation, and duration-aware scheduling are designed together.
 - **Retries preserve evidence.** A failed attempt followed by a pass is `FLAKY`, never silently
   rewritten as a clean pass.
 - **Crashes cannot erase completed work.** Workers stream results as tests finish, and unfinished
@@ -153,20 +153,28 @@ $ python -m pip install testenix
 $ testenix run tests
 ```
 
+`workers = "auto"` adapts to the schedulable work instead of launching one process per CPU. Use
+`testenix tune` (also available as `testenix benchmark`) for a measured project recommendation.
+Import-heavy native suites can explicitly generate a source-hashed collection manifest, and large
+independent modules can opt into conservative `--shard-modules` scheduling. See
+[parallel execution](https://polishdataengineer.github.io/testenix/guides/parallelism/) for both trust boundaries.
+
 To evaluate unreleased source changes, install the current `main` branch with
 `python -m pip install "testenix @ git+https://github.com/polishdataengineer/testenix.git@main"`.
 
 ## Performance evidence, with context
 
-The checked-in development baseline measured native `testenix run` on 100,000 empty tests across
-16 generated modules on an Apple M4 Pro and CPython 3.11. Native Testenix completed that specific
-workload in a median 8.04 seconds, compared with 25.33 seconds for pytest and 21.30 seconds for
-pytest-xdist. These measurements do not apply to the delegated `testenix pytest` command.
+The checked-in development baseline measured **Testenix 0.1.0**, not the current release. Native
+`testenix run` completed 100,000 generated no-op tests across 16 modules on one Apple M4 Pro and
+CPython 3.11 machine in a median 8.04 seconds, compared with 25.33 seconds for pytest and 21.30
+seconds for pytest-xdist. It used four workers, `--no-history`, and pytest-xdist's default `load`
+scheduler. These measurements do not apply to Testenix 0.2.1, a real project, the default-history
+mode, or the delegated `testenix pytest` command.
 
 <div class="benchmark-caveat">
-This is a preliminary synthetic result from one machine, not a promise that every project will be
-3.15× faster. The benchmark page publishes the raw samples, environment, variance, methodology,
-and limitations so that the claim can be evaluated rather than taken on trust.
+This is historical synthetic evidence from one machine, not a promise that every project will be
+3.15× faster. No clean Testenix 0.2.1 scaling matrix is checked in yet. The benchmark page publishes
+the raw samples, environment, variance, methodology, current matrix status, and limitations.
 </div>
 
 [Inspect the benchmark data](https://polishdataengineer.github.io/testenix/benchmarks/results/) or
@@ -316,6 +324,8 @@ paths = ["tests"]
 workers = "auto"
 retries = 0
 history = ".testenix/history.sqlite3"
+# shard_modules = true
+# manifest = ".testenix/collection.json"
 # timeout = 10
 # json = "reports/testenix.json"
 # junit = "reports/junit.xml"
@@ -330,6 +340,32 @@ $ testenix run --workers 4 --retries 1 --json reports/result.json
 Use `--no-history` for a side-effect-free run. Duration history normally helps later runs schedule
 long tests earlier.
 
+`workers = "auto"` adapts to the selected suite instead of copying the logical CPU count. It is
+capped by the actual schedulable units and uses duration history when enough is available. Measure
+an explicit project setting with:
+
+```console
+$ testenix tune tests --warmups 1 --repeats 5
+$ testenix tune --write
+```
+
+`testenix benchmark` is an alias for `testenix tune`.
+
+Module affinity is the safe default. For a large module whose tests are known to be independent,
+`--shard-modules` opts eligible tests into finer scheduling after conservative static checks. Read
+[parallel execution](https://polishdataengineer.github.io/testenix/guides/parallelism/) before enabling it.
+
+To avoid repeating collection imports on later unchanged runs, create and trust a source-hashed
+manifest explicitly:
+
+```console
+$ testenix manifest tests --output .testenix/collection.json
+$ testenix run tests --manifest .testenix/collection.json
+```
+
+Testenix verifies the complete file inventory and every SHA-256 before reuse. A stale manifest
+falls back to supervised collection rather than running a stale test selection.
+
 ## Use it from Python
 
 The runner also exposes a typed API:
@@ -337,12 +373,20 @@ The runner also exposes a typed API:
 ```python
 from testenix import Status, TestenixConfig, run
 
-result = run("tests", TestenixConfig(workers=4, history_path=None))
-failed = [item.test.id for item in result.tests if item.status is not Status.PASS]
+
+def main() -> None:
+    result = run("tests", TestenixConfig(workers=4, history_path=None))
+    failed = [item.test.id for item in result.tests if item.status is not Status.PASS]
+    print(failed)
+
+
+if __name__ == "__main__":
+    main()
 ```
 
 Async applications can call `await testenix.run_async(...)`. Cancellation terminates active
-collection and execution process trees before control returns to the caller.
+collection and execution process trees before control returns to the caller. Executable scripts
+must place the top-level call behind the same `if __name__ == "__main__":` guard on every platform.
 
 ## Next steps
 
@@ -712,10 +756,13 @@ those tests were published.
 ## Performance with thousands of migrated tests
 
 Migration unlocks the native scheduler, process supervision, async engine, retries, history, and
-Testenix reports. It does not guarantee that every converted suite is faster. Testenix keeps a
-normal module as one affinity unit so module-scoped fixtures are not duplicated. Consequently,
-3,000 tests in one source module still form one schedulable unit; 3,000 tests spread across enough
-independent modules can use multiple workers.
+Testenix reports. It does not guarantee that every converted suite is faster. By default Testenix
+keeps a normal module as one affinity unit so module-scoped fixtures are not duplicated.
+Consequently, 3,000 tests in one source module still form one schedulable unit; 3,000 tests spread
+across enough independent modules can use multiple workers. A project may later opt eligible native
+modules into `--shard-modules`, but only after validating the generated suite and the documented
+static-analysis trust boundary. Run `testenix tune` on the published native copy before fixing its
+CI worker count.
 
 The checked-in migration baseline used an Apple M4 Pro, CPython 3.11, 3,000 generated tests in 64
 modules, four native workers, one warm-up, and five measured rounds:
@@ -1091,8 +1138,43 @@ $ testenix run --workers 4
 $ testenix run --workers 1
 ```
 
-`auto` resolves to the logical CPU count reported by Python. For CI and benchmark runs, an explicit
-count makes resource use and results easier to reproduce.
+`auto` is adaptive; it is not an alias for the logical CPU count. Testenix first counts the
+execution units it can actually schedule (module-affinity groups, isolated timeout tests, and any
+eligible opt-in module shards). It caps the choice by that count and the available CPUs. With
+reliable duration history, a startup-cost/makespan model chooses the smallest worker count within a
+narrow tolerance of the predicted best. Without enough history, cold-start auto uses a conservative
+cap so a short suite does not launch one process per CPU.
+
+An explicit number remains a hard project setting. Prefer one in tightly budgeted CI; for a
+project-specific measured value, use the tuner.
+
+## Tune a project
+
+```console
+$ testenix tune tests --warmups 1 --repeats 5
+$ testenix benchmark tests --candidates 1,2,4,8
+$ testenix tune --json reports/tuning.json --write
+```
+
+`benchmark` is an alias for `tune`. The command runs fresh CLI processes, uses a green one-worker
+inventory probe, disables history for all timing samples, measures native candidates in alternating
+order, and rejects a candidate whose test inventory or outcomes differ. The recommendation is the
+smallest worker count within a narrow tolerance of the best median, avoiding a larger setting for
+measurement noise. `--write` stores that integer in
+`[tool.testenix].workers`; it is an explicit file change, never an effect of `workers = "auto"`.
+The automatic sweep respects the process-visible CPU capacity and tests at most 1/2/4 workers;
+larger counts must be requested explicitly with `--candidates`.
+
+Pass `--shard-modules` to tune that explicit mode and `--manifest FILE` to include the verified
+single-import collection path in every native sample. When `--write` is present, Testenix refuses a
+transient sharding or manifest override that differs from `[tool.testenix]`, because writing only
+`workers` would persist a recommendation for a different execution profile. Configure the profile
+first or tune it without `--write`.
+
+Use `--pytest-source PATH` to add an optional pytest timing for a corresponding source suite. The
+tuner's primary contract is worker selection for the native suite. Its optional pytest ratio is
+orientation for that exact invocation, not sufficient evidence for a public speed claim; public
+comparisons must also satisfy the [benchmarking contract](https://polishdataengineer.github.io/testenix/benchmarking/).
 
 ## Scheduling
 
@@ -1101,6 +1183,59 @@ preserves module-fixture reuse and avoids splitting hidden module state between 
 
 When duration history exists, Testenix schedules longer units first. This longest-processing-time
 strategy is deterministic and reduces the chance that one slow shard becomes the tail of the run.
+
+## Opt-in intra-module sharding
+
+One large module normally exposes one unit no matter how many tests it contains. If its tests are
+known to be independent, explicitly request finer units:
+
+```console
+$ testenix run tests --shard-modules
+```
+
+or configure:
+
+```toml
+[tool.testenix]
+shard_modules = true
+```
+
+This is deliberately off by default. Before splitting a module, Testenix statically fails closed
+when it detects module- or session-scoped fixtures, direct writes to module globals, mutation of
+obvious module-level containers, or executable import-time lifecycle behavior. Function-scoped
+fixtures, including autouse fixtures, may be recreated in separate workers and do not block
+sharding. Eager calls in module assignments, annotations, decorators, function defaults, and class
+bases or keywords are treated as import-time lifecycle behavior and keep the module intact.
+
+Static analysis cannot prove that arbitrary calls, imported libraries, environment state, or
+external services are free of shared effects. Enabling the option is therefore a project trust
+decision. Validate the suite both with and without sharding before adopting it in CI. Modules that
+fail the safety check retain normal module affinity while eligible modules can be split.
+
+## Avoid the collection-side import
+
+Without a manifest, safe supervised collection imports selected modules once, then execution
+workers import their assigned modules again to materialize functions and case values. Projects for
+which imports are a meaningful part of wall time can generate an explicit trusted manifest:
+
+```console
+$ testenix manifest tests --output .testenix/collection.json
+$ testenix run tests --manifest .testenix/collection.json
+```
+
+The manifest records collection roots, the complete Python-source inventory and SHA-256 hashes,
+test metadata, collection issues, and sharding decisions. Each run verifies the requested roots,
+the exact file set, and every source digest before reusing it. Malformed manifest JSON is rejected
+as invalid input. If a file was added or removed, a source changed, or current-source verification
+cannot establish an exact match, the manifest is stale and Testenix falls back to the normal
+isolated collection process. It does not execute a stale selection.
+
+This optimization removes the collection-side import on an unchanged run; execution workers still
+import the code they execute. It is not an implicit cache. If collection depends on environment
+variables, generated files outside the selected roots, network state, or other inputs not captured
+by source hashes, the producer must regenerate the manifest when those inputs change. Set
+`manifest = ".testenix/collection.json"` in `[tool.testenix]` only when that trust boundary is
+appropriate.
 
 ## Process isolation
 
@@ -1148,7 +1283,8 @@ async def main() -> None:
     print(result.exit_code)
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
 Cancelling `run_async` terminates active collection and execution process trees before the
@@ -1156,8 +1292,9 @@ coroutine returns control.
 
 ## Platform note
 
-On Windows, scripts that call `run()` or `run_async()` directly must use the standard
-multiprocessing guard:
+On every supported platform, executable scripts that call `run()` or `run_async()` directly must
+use the standard multiprocessing guard because the supervised worker protocol uses the `spawn`
+start method:
 
 ```python
 if __name__ == "__main__":
@@ -1322,13 +1459,16 @@ testenix [-h] [--version]
 testenix [--config PYPROJECT] run [RUN_ARGS ...]
 testenix pytest [PYTEST_ARGS ...]
 testenix migrate FRAMEWORK PATH [PATH ...] [MIGRATION_ARGS ...]
+testenix [--config PYPROJECT] tune [PATH ...] [TUNING_ARGS ...]
+testenix [--config PYPROJECT] benchmark [PATH ...] [TUNING_ARGS ...]
+testenix manifest PATH [PATH ...] --output FILE
 ```
 
 | Option | Description |
 | --- | --- |
 | `-h`, `--help` | Show command help. |
 | `--version` | Print the installed Testenix version. |
-| `--config PATH` | Load `[tool.testenix]` for native `testenix run`. |
+| `--config PATH` | Load `[tool.testenix]` for native `run` and `tune`/`benchmark` commands. |
 
 ## `testenix run`
 
@@ -1342,6 +1482,8 @@ testenix run [PATH ...]
              [--json FILE]
              [--junit FILE]
              [--history FILE | --no-history]
+             [--shard-modules]
+             [--manifest FILE]
              [-q | -v | -vv]
              [--color {auto,always,never} | --no-color]
              [--show-skips]
@@ -1351,7 +1493,7 @@ testenix run [PATH ...]
 | Argument | Default | Description |
 | --- | --- | --- |
 | `PATH ...` | configured `paths`, otherwise `tests` | Files or directories to discover. |
-| `-w`, `--workers` | `auto` | Worker process count or logical CPU count. |
+| `-w`, `--workers` | `auto` | Positive worker count, or adaptive selection from schedulable units, history, startup cost, and CPU capacity. |
 | `--retries` | `0` | Additional attempts after a gating outcome. |
 | `--timeout` | none | Global hard deadline for every selected test. |
 | `-t`, `--tag` | none | Required tag; repeat for AND selection. |
@@ -1359,6 +1501,8 @@ testenix run [PATH ...]
 | `--junit` | none | Write a JUnit XML report. |
 | `--history` | `.testenix/history.sqlite3` | Override the duration-history database. |
 | `--no-history` | off | Disable reading and writing history. |
+| `--shard-modules` | off | Opt eligible modules into per-test execution units after conservative static safety checks. |
+| `--manifest FILE` | none | Reuse an explicitly generated, source-verified trusted collection manifest. |
 | `-q`, `--quiet` | off | Hide the run header and compact per-file table. Collection errors, failure details, and the final summary remain visible. |
 | `-v`, `--verbose` | off | Print one result row per test in the stable detailed format. Repeat for `-vv`. |
 | `-vv` | off | Add worker, attempt, and phase metadata, including captured output. |
@@ -1374,6 +1518,20 @@ collection/failure diagnostics, and a final summary. Console output is assembled
 order after execution completes; these modes do not promise live progress updates. Presentation
 flags change only terminal rendering, not selection, scheduling, result statuses, JSON, JUnit, or
 exit codes.
+
+`workers = auto` never means “start one process per logical CPU.” Testenix caps it by the number of
+units that can run independently. Reliable duration history feeds a makespan/startup-cost model;
+cold runs use a conservative cap. The final console and JSON results report the worker count
+actually used. An explicit integer remains useful for fixed CI resource limits and reproducible
+published benchmarks.
+
+`--shard-modules` is an explicit safety/performance trade-off. Modules with module/session
+fixtures, statically visible mutable global state, or import-time lifecycle hazards keep module
+affinity; eligible modules may be split. Static analysis cannot prove every dynamic side effect.
+
+`--manifest` accepts the versioned JSON produced by `testenix manifest`. Malformed input is a usage
+error. An otherwise valid manifest whose roots, complete Python-file inventory, or SHA-256 digests
+no longer match is treated as stale, and the run safely performs ordinary supervised collection.
 
 In `auto` color mode, Testenix requires a terminal, respects `NO_COLOR`, allows `FORCE_COLOR`, and
 disables styling for a truthy `CI` value or `TERM=dumb`. Explicit `always` or `never` takes
@@ -1451,6 +1609,71 @@ grouped by severity and code, with the first source location shown. Use `--repor
 worker setting. It is emitted only for `--check` or publication after static analysis succeeds,
 because dry-run and unsupported transactions never execute the parallel gate.
 
+## `testenix tune` / `testenix benchmark`
+
+```text
+testenix tune [PATH ...]
+              [--config PYPROJECT]
+              [--candidates N[,N...]]
+              [--warmups N]
+              [--repeats N]
+              [--pytest-source PATH] ...
+              [--json FILE|-]
+              [--shard-modules]
+              [--manifest FILE]
+              [--write]
+```
+
+`testenix benchmark` is an exact alias for `testenix tune`.
+
+| Argument | Default | Description |
+| --- | --- | --- |
+| `PATH ...` | configured `paths`, otherwise `tests` | Native Testenix suite to tune. |
+| `--candidates N[,N...]` | resource-aware 1/2/4 sweep | Positive worker counts to measure. Counts above the number of execution units are deduplicated at that limit; values above four require this explicit option. |
+| `--warmups N` | `1` | Unrecorded warmups for each native candidate and optional pytest source. |
+| `--repeats N` | `5` | Recorded samples for each candidate. Candidate order alternates between rounds. |
+| `--pytest-source PATH` | none | Also time a corresponding pytest source path; repeat for multiple paths. |
+| `--json FILE\|-` | none | Write the complete tuning report to a new file, or standard output with `-`. |
+| `--shard-modules` / `--no-shard-modules` | configured value | Tune with explicit safe intra-module sharding or module affinity. |
+| `--manifest FILE` | configured value | Use one source-verified collection manifest for every native sample. |
+| `--write` | off | Persist the measured recommendation as `[tool.testenix].workers`. |
+
+The command measures fresh CLI processes with Testenix history disabled. A one-worker probe
+establishes the inventory and outcomes, and every native candidate must match them. To avoid
+persisting noise, it recommends the smallest worker count within a narrow tolerance of the best
+median. `--write` is the only configuration-mutating mode; normal tuning and adaptive auto do not
+edit configuration. A workers-only write is rejected when a transient sharding or manifest override
+differs from the loaded project configuration, because that recommendation would not describe the
+persisted execution profile.
+
+The optional pytest row is useful for local orientation only when it represents the corresponding
+source suite. A public pytest/Testenix claim still needs equivalent inventories and outcomes,
+counterbalanced commands, environment/version provenance, and the complete
+[benchmarking contract](https://polishdataengineer.github.io/testenix/benchmarking/).
+
+## `testenix manifest`
+
+```text
+testenix manifest PATH [PATH ...] --output FILE
+```
+
+The command performs supervised native collection and creates a new deterministic trusted
+manifest. It records collection roots, the complete selected Python-source inventory and SHA-256
+fingerprints, collected tests and issues, and conservative module-sharding decisions. `FILE` must
+not already exist; Testenix does not silently replace a previous trust artifact.
+
+Use it explicitly on later runs:
+
+```console
+$ testenix manifest tests --output .testenix/collection.json
+$ testenix run tests --manifest .testenix/collection.json
+```
+
+This can avoid importing every selected module once for collection and once again for execution.
+Execution workers still import the modules they run. Source verification cannot cover dynamic
+collection inputs such as environment variables or external services; regenerate the manifest
+when those inputs change.
+
 ## Examples
 
 ```console
@@ -1461,6 +1684,12 @@ $ testenix run --retries 1 --timeout 10
 $ testenix run -v --show-skips --durations 10
 $ testenix run --color never
 $ testenix run --json reports/run.json --junit reports/junit.xml
+$ testenix run tests --shard-modules
+$ testenix manifest tests --output .testenix/collection.json
+$ testenix run tests --manifest .testenix/collection.json
+$ testenix tune tests --candidates 1,2,4,8 --warmups 1 --repeats 5
+$ testenix benchmark tests --json reports/tuning.json
+$ testenix tune --write
 $ testenix --config config/pyproject.toml run
 $ testenix pytest -q --tb=short tests
 $ testenix migrate pytest tests --dry-run
@@ -1518,6 +1747,8 @@ workers = "auto"
 retries = 0
 # timeout = 10.0
 tags = []
+# shard_modules = true
+# manifest = ".testenix/collection.json"
 # json = "reports/testenix.json"
 # junit = "reports/junit.xml"
 history = ".testenix/history.sqlite3"
@@ -1539,8 +1770,15 @@ Files and directories used when no positional path is passed to `testenix run`.
 - Type: positive integer or `"auto"`
 - Default: `"auto"`
 
-`auto` uses Python's logical CPU count. An explicit number is recommended for reproducible CI and
-benchmark runs.
+`auto` is adaptive rather than equal to Python's logical CPU count. After collection and selection,
+Testenix caps concurrency by the available CPUs and the number of independently schedulable units.
+Reliable duration history feeds a worker-startup/makespan estimate; without enough history, a
+conservative cold-start cap avoids oversubscribing short suites. The smallest worker count within a
+narrow tolerance of the predicted best is selected.
+
+An explicit number is recommended for strict CI resource limits and publishable benchmark runs.
+Use `testenix tune` (or its `testenix benchmark` alias) to measure native candidates for this
+project, and `testenix tune --write` to persist its recommendation explicitly.
 
 ### `retries`
 
@@ -1593,6 +1831,38 @@ history = false
 
 The programmatic field is `history_path` and accepts a `pathlib.Path` or `None`.
 
+### `shard_modules`
+
+- Type: boolean
+- Default: `false`
+
+Allow eligible modules to be divided into finer per-test execution units. The static analyzer
+keeps module affinity when it sees module/session fixtures, mutation of obvious module-global
+state, or import-time lifecycle hazards. Function-scoped fixtures, including autouse fixtures, do
+not block sharding.
+
+This option is explicitly opt-in because static analysis cannot prove the absence of all dynamic
+side effects. Validate the project with and without sharding before enabling it in CI.
+
+### `manifest`
+
+- Type: filesystem path or `null`
+- Default: none
+
+Path to a trusted collection manifest generated explicitly with:
+
+```console
+$ testenix manifest tests --output .testenix/collection.json
+```
+
+On each run Testenix verifies the requested collection roots, complete selected Python-file
+inventory, and SHA-256 source digests. An exact match bypasses the collection-side imports; a stale
+but well-formed manifest falls back to normal supervised collection. Malformed JSON is rejected.
+Execution workers still import the modules they run. Regenerate the manifest when source files or
+dynamic collection inputs change.
+
+The programmatic field is `manifest_path` and accepts a `pathlib.Path` or `None`.
+
 ## Programmatic configuration
 
 ```python
@@ -1606,6 +1876,8 @@ config = TestenixConfig(
     retries=1,
     timeout=5.0,
     tags=("unit",),
+    shard_modules=True,
+    manifest_path=Path(".testenix/collection.json"),
     json_path=Path("reports/run.json"),
     history_path=None,
 )
@@ -1755,9 +2027,68 @@ evidence for specific synthetic workloads, not a universal claim that Testenix i
 than pytest. `Testenix` in these results means the native `testenix run` engine. The
 `testenix pytest` compatibility bridge delegates to pytest and is not represented here.
 
-![Preliminary Testenix throughput ratios](https://polishdataengineer.github.io/testenix/_static/benchmark-speedup.svg)
+## Testenix 0.2.1 scaling matrix
 
-## Median wall-clock time
+No current-version matrix is checked in yet. The historical results below must therefore not be
+described as Testenix 0.2.1 performance. The new provenance-gated harness covers
+100/500/1,000/3,000 tests, balanced/dominant/single-module layouts, 1/2/4/auto workers, and both
+default history and `--no-history`, plus explicit safe-module sharding. Its default design uses
+dimension sweeps; use
+`--full-cross-product` only when the much larger run is intentional.
+
+`auto` is passed literally to Testenix and remains adaptive; observed Testenix worker counts are
+stored per sample. pytest-xdist resolves its side of an `auto` row separately to the machine's
+logical CPU count.
+
+```console
+$ uv run --no-editable python benchmarks/run_scaling_matrix.py \
+    --output benchmarks/scaling_matrix_0_2_1.json
+```
+
+The command refuses a dirty worktree or an installed Testenix version that differs from
+`pyproject.toml`. `--allow-dirty` is available only for unpublished smoke runs. A matrix becomes
+publishable here only after five measured rounds, one warm-up, clean commit provenance, and full
+axis coverage pass the documentation generator's validation.
+
+
+## Real-project harness
+
+The 118-test project used during v0.2 migration validation was a semantic parity gate, not a
+publishable benchmark: its release-note timings were single observations without a committed
+multi-round record. Use the redaction-safe manifest harness for a real repository:
+
+```console
+$ cp benchmarks/real_project_manifest.example.json /tmp/testenix-project-benchmark.json
+$ uv run --no-editable python benchmarks/run_project_benchmark.py \
+    --project /absolute/path/to/project \
+    --manifest /tmp/testenix-project-benchmark.json \
+    --output /tmp/testenix-project-result.json
+```
+
+The manifest stores argument arrays, never shell fragments. The result omits stdout, stderr,
+environment values, absolute project paths, and private source. It records only timings, aggregate
+output sizes, optional tree fingerprints, and redacted Git provenance. A migrated-suite comparison
+must point the manifest at a successful migration report to become publication-eligible. The
+harness verifies the report's exact per-test inventory and outcomes, complete source and generated
+Python-file inventories, current hashes, and binds canonical `python -m pytest` /
+`python -m testenix run` commands to the report's source/output roots. Publishable source roots are
+directories so support files such as `conftest.py` are covered. Without the report the result is
+diagnostic-only. Commands are retained for
+reproducibility. Publishable commands put options before `--` and exact suite targets after it, so
+an option value cannot impersonate a migration root. Keep secrets in the environment or list
+sensitive argument indexes in `redact_arguments`.
+
+
+## Historical Testenix 0.1.0 synthetic baseline
+
+The checked-in `3.15×` figure is a Testenix 0.1.0 result for 100,000 generated no-op
+tests across 16 modules, four workers, disabled history (`--no-history`), and pytest-xdist's default
+`load` strategy. It is retained as transparent historical evidence; it is not a measurement of
+Testenix 0.2.1.
+
+![Historical Testenix 0.1.0 throughput ratios](https://polishdataengineer.github.io/testenix/_static/benchmark-speedup.svg)
+
+### Median wall-clock time
 
 Lower time is better. A speedup of `2.85×` means pytest's median
 wall time was 2.85 times the Testenix median for that exact
@@ -1774,19 +2105,24 @@ The 100,000-test result meets the project's local five-run, one-warmup minimum.
 It remains a synthetic result from one machine, not a universal performance promise.
 </div>
 
-## Environment
+### Environment and controls
 
 - CPU: Apple M4 Pro (14 logical CPUs)
 - Machine: `arm64`
 - Platform: `macOS-26.5.1-arm64-arm-64bit`
 - Python: `3.11.14`
+- Testenix: `0.1.0`
+- Workers: four for Testenix and pytest-xdist
+- Testenix history: disabled with `--no-history`
+- pytest-xdist: version `3.8.0`,
+  default `load` distribution
 - Measurement: complete subprocess wall-clock time, including discovery, execution, aggregation,
   and console rendering
 - Correctness gate: every command had to exit successfully and report the expected test count
 
 
 
-## Raw samples and variance
+### Raw samples and variance
 
 ### 10,000 no-op tests / 16 modules
 
@@ -1801,6 +2137,8 @@ It remains a synthetic result from one machine, not a universal performance prom
 - pytest-xdist raw samples: 2.170, 2.267, 2.077, 2.075, 2.106 seconds
 - Measured rounds: 5; warmups: 1
 - Workers: 4
+- Testenix history: disabled with `--no-history`
+- pytest-xdist strategy: default `load`
 - Recorded at: `2026-07-20T12:12:43.635798+00:00`
 - Commit: `8f24f8a7bd72fa876988a8ce96364be97e35c2b6`
 - Clean working tree at capture: yes
@@ -1819,6 +2157,8 @@ It remains a synthetic result from one machine, not a universal performance prom
 - pytest-xdist raw samples: 2.146, 2.129, 2.109, 2.138, 2.176 seconds
 - Measured rounds: 5; warmups: 1
 - Workers: 4
+- Testenix history: disabled with `--no-history`
+- pytest-xdist strategy: default `load`
 - Recorded at: `2026-07-20T12:13:53.369799+00:00`
 - Commit: `18d9bba6cb5c8e39c2d5b211ee4384ae8f824524`
 - Clean working tree at capture: yes
@@ -1837,6 +2177,8 @@ It remains a synthetic result from one machine, not a universal performance prom
 - pytest-xdist raw samples: 21.239, 21.120, 22.216, 21.300, 21.949 seconds
 - Measured rounds: 5; warmups: 1
 - Workers: 4
+- Testenix history: disabled with `--no-history`
+- pytest-xdist strategy: default `load`
 - Recorded at: `2026-07-20T12:19:39.942492+00:00`
 - Commit: `24b877c2f98420e91dcd2c8bcbc9417c7cf1ac96`
 - Clean working tree at capture: yes
@@ -1847,7 +2189,9 @@ It remains a synthetic result from one machine, not a universal performance prom
 These separate measurements start with generated pytest or unittest sources, complete one safe
 copy-and-validate migration, and then compare recurring source-suite runs with recurring native
 Testenix runs. The migration transaction is a one-time cost shown separately; it is not included
-in either execution median.
+in either execution median. These records came from the pre-v0.2 source commit linked below; its
+distribution metadata still reported `0.1.0`. They are historical evidence, not measurements of
+the current release.
 
 | Source runner | Workload | Tests / modules | Source median | Native median | Native vs source | Migration transaction |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
@@ -1941,9 +2285,9 @@ therefore material, and none of these synthetic rows predicts a specific real pr
 
 ## Interpretation
 
-The checked-in results show that Testenix has low per-test overhead for large generated suites and
-that its built-in process model is competitive with both sequential pytest and pytest-xdist in
-those scenarios.
+The historical checked-in results show that Testenix 0.1.0 had low per-test overhead for the large
+generated suites above and was competitive with sequential pytest and pytest-xdist's default
+`load` strategy in those scenarios. They are not evidence for the current release.
 
 They do **not** yet answer how Testenix performs for import-heavy applications, complex fixture
 graphs, assertion failures, real repositories, or different operating systems. Pytest also has a
@@ -1999,18 +2343,71 @@ For every scenario record wall-clock duration, collection time, execution time, 
 worker utilization, number of process starts, result completeness, and output size. Performance
 claims require at least five runs per configuration and must publish the environment fingerprint.
 
-The current v0.1 harness automates wall-clock samples and the environment fingerprint across 16
-generated modules for a four-worker run. It also validates the completed test count, rotates runner
-order between measured rounds, supports an explicit module count, and records throughput, mean, and
-standard deviation. Pytest plugin autoloading and its cache provider are disabled, pytest-xdist is
-loaded explicitly, and every tool runs from the generated suite directory so repository-level
-pytest configuration does not affect the comparison. New output also records the commit, dirty
-state, lockfile hash, timestamp, and installed framework versions. The remaining telemetry above is
-the acceptance contract for the next harness iteration, not data claimed by the checked-in baseline
-files.
+The checked-in headline files were recorded with Testenix 0.1.0 across 16 generated modules, four
+workers, and `--no-history`. They automate subprocess wall-clock samples and the environment
+fingerprint, validate the completed test count, rotate runner order between measured rounds, and
+record throughput, mean, standard deviation, provenance, and raw samples. Pytest plugin autoloading
+and its cache provider are disabled, pytest-xdist 3.8 is loaded explicitly with its default `load`
+distribution, and every tool runs from the generated suite directory so repository-level pytest
+configuration does not affect the comparison. Those historical records do not measure Testenix
+0.2.1.
+
+Schema-version 2 harness output additionally records the requested and resolved worker counts,
+balanced/dominant/single-module test distributions, default-history versus `--no-history`, the
+pytest-xdist distribution strategy, and captured stdout/stderr byte counts. Collection/execution
+splits, peak memory, utilization, process counts, and the remaining telemetry above are still the
+acceptance contract for a later harness iteration, not data claimed by the historical baseline.
 
 Correctness wins over speed: a run with a missing, duplicated, or incorrectly finalized result is
 invalid and excluded from performance comparisons.
+
+## Evidence levels
+
+1. **Historical synthetic baseline.** The committed `3.15×` figure is Testenix 0.1.0 on 100,000
+   generated no-op tests, 16 modules, four workers, disabled history, and one M4 Pro. It remains
+   useful provenance but must not be labelled as current-version performance.
+2. **Current-version scaling matrix.** `run_scaling_matrix.py` requires the installed Testenix
+   version to match `pyproject.toml` and refuses a dirty worktree by default. The dimension-sweep
+   design covers 100, 500, 1,000, and 3,000 tests; 1, 2, 4, and `auto` workers;
+   balanced/dominant/single-module layouts; and default history versus `--no-history`. The reference
+   configuration changes one axis at a time. `--full-cross-product` is available when every
+   combination is worth the substantially larger runtime. `auto` remains an adaptive Testenix
+   request; the harness records the worker count observed in each Testenix sample. For the xdist
+   side of that row, `auto` resolves separately to Python's logical CPU count and is labelled as
+   such.
+3. **Real-project evidence.** `run_project_benchmark.py` executes argument arrays from a local JSON
+   manifest without a shell. Its result excludes source, stdout/stderr, environment values,
+   absolute project paths, and Git remotes. Publication requires a successful migration report:
+   the harness verifies its exact per-test inventory and outcomes, complete current Python-file
+   inventories and hashes under directory source roots, the complete generated Python inventory,
+   and that canonical `python -m pytest` / `python -m testenix run` commands point at the report's
+   source and output roots. It records only aggregate timings/output sizes, digests, redacted Git
+   state, and optional content fingerprints.
+
+The 118-test project mentioned in the v0.2.0 release was a differential semantic-validation gate.
+Its three timings were single observations, not a committed multi-round benchmark, and therefore do
+not establish a real-project speedup.
+
+## Project-local tuning is not a published benchmark
+
+`testenix tune` and its `testenix benchmark` alias answer a narrow operational question: which
+native worker count is fastest for this selected project suite on this machine now? They use fresh
+CLI processes, disable history, validate a green one-worker inventory, alternate candidate order,
+require native candidate inventory/outcome parity, and recommend the smallest worker count within
+a narrow tolerance of the best measured median. This is appropriate for writing a local
+`[tool.testenix].workers` value.
+
+The optional `--pytest-source` measurement is orientation for a corresponding source suite. A
+tuning report alone is not sufficient for marketing because a migrated native path and its pytest
+source may differ in collection, wrappers, output, or configuration. Publishing a ratio still
+requires all of this contract: equivalent inventories and outcomes, full-process wall time,
+counterbalanced order, at least one warm-up and five measured rounds, command/version/environment
+provenance, output sizes, and an explanation of history, sharding, manifest, and plugin settings.
+
+For every published Testenix result, record both the requested and observed worker count. `auto` is
+adaptive and must never be relabelled as the logical CPU count. Also record whether
+`--shard-modules` was enabled and whether a trusted collection manifest was accepted or fell back
+to supervised collection; either choice changes the amount and shape of schedulable work.
 
 ## Pytest compatibility bridge
 
@@ -2025,28 +2422,65 @@ environment, pytest configuration, plugins, and arguments for both `python -m py
 Testenix execution speedup. Native comparisons continue to use `testenix run` and must validate
 that both runners execute the same tests and produce equivalent outcomes.
 
-Run the reproducible local harness with:
+Run one reproducible synthetic scenario with:
 
 ```bash
-uv run python benchmarks/run_benchmark.py --tests 1000 --workers 4 --repeats 5
-uv run python benchmarks/run_benchmark.py --tests 1000 --workers 4 --repeats 5 --uneven
-uv run python benchmarks/run_benchmark.py --tests 10000 --modules 1000 --workers 4 --repeats 5
+uv run --no-editable python benchmarks/run_benchmark.py \
+  --tests 1000 --modules 16 --workers 4 --repeats 5 --warmups 1 \
+  --module-layout balanced --history-mode disabled --xdist-strategy load
 ```
+
+Generate the current-version dimension sweeps from a clean checkout with:
+
+```bash
+uv run --no-editable python benchmarks/run_scaling_matrix.py \
+  --output benchmarks/scaling_matrix_0_2_1.json
+```
+
+For an unpublished smoke test only, add `--quick --allow-dirty`. A publishable matrix must retain
+five rounds, one warm-up, clean provenance, and the complete requested coverage.
+
+Measure a real project without committing its code or private paths:
+
+```bash
+cp benchmarks/real_project_manifest.example.json /tmp/testenix-project-benchmark.json
+# Edit expected counts, migration-report path, fingerprints, and runner commands.
+uv run --no-editable python benchmarks/run_project_benchmark.py \
+  --project /absolute/path/to/project \
+  --manifest /tmp/testenix-project-benchmark.json \
+  --output /tmp/testenix-project-result.json
+```
+
+Keep private manifests and results outside the repository until their labels, commit policy, and
+fingerprints have been reviewed for publication. Environment override **values** are never written
+to the result; only their key names are retained. Commands are recorded for reproducibility, so
+secrets should stay in the environment. If an unavoidable command argument is sensitive, list its
+zero-based index in that runner's `redact_arguments` field.
+
+Without `migration_report`, the harness can still produce a private diagnostic, but it always sets
+`publication_eligible` to `false`. A publishable run also requires the canonical module
+entrypoints, a clean project, at least one warm-up and five measured rounds, explicit Testenix
+workers and history mode, and installed-distribution identities for both pytest and Testenix. The
+pytest version is probed inside the same project environment used by the timed commands. In each
+runner command, place options before `--` and the exact benchmark suite roots after it. The harness
+uses that delimiter to distinguish positional targets from values of options such as `-k` or
+`--tag` and requires those targets to match the migration report exactly.
 
 Maintainers can run the same comparison from GitHub's **Benchmarks** workflow and download its raw
 JSON artifact. Shared GitHub runners are appropriate for reproducibility checks, not for silently
 replacing the approved marketing baseline: their timing variance is outside this project's control.
 
-The checked-in baseline files are development evidence, not universal performance claims. See
-`docs/performance-analysis.md` for the current large-suite results, optimization profile, memory
-notes, and native-code decision. Real project suites and cross-platform repetitions remain required
-before publishing broad comparative claims.
+The checked-in baseline files are historical development evidence, not universal or current-version
+performance claims. See `docs/performance-analysis.md` for the large-suite results, optimization
+profile, memory notes, and native-code decision. A clean Testenix 0.2.1 scaling matrix, publishable
+real-project suites, alternative pytest-xdist strategies, and cross-platform repetitions remain
+required before publishing broad comparative claims.
 
 An approved public baseline must be committed through a reviewed pull request. Do not remove slow
 but valid samples as outliers; invalid commands remain evidence and must be explained. The current
 checked-in 10,000- and 100,000-test files each contain five measured rounds, one warm-up, and clean
-commit provenance. They remain single-machine synthetic evidence, so broader claims still require
-the real-project and cross-platform scenarios above.
+commit provenance. They remain Testenix 0.1.0 single-machine synthetic evidence, so broader claims
+still require the current-version, real-project, and cross-platform scenarios above.
 
 ---
 
@@ -2059,22 +2493,25 @@ Source: docs/performance-analysis.md
 
 ## Executive summary
 
-The optimized native v0.1 `testenix run` engine is faster than pytest and pytest-xdist in the checked-in synthetic
-large-suite scenarios. The largest recorded comparison is 100,000 passing tests across 16 modules:
-Testenix completed the suite in a median 8.038 seconds, pytest in 25.333 seconds, and pytest-xdist
-in 21.300 seconds. Every measured command had to report the expected test count or the harness
-rejected the sample. The baseline contains one warm-up and five counterbalanced measured rounds,
-and Testenix's samples ranged from 7.912 to 8.096 seconds.
+The checked-in headline numbers are a **historical Testenix 0.1.0 synthetic baseline**, not current
+Testenix 0.2.1 results. In the largest recorded comparison, 100,000 generated no-op tests were spread
+evenly across 16 modules and run with four workers and `--no-history`. Testenix completed the suite
+in a median 8.038 seconds, pytest in 25.333 seconds, and pytest-xdist 3.8's default `load` scheduler
+in 21.300 seconds. Every command had to report the expected test count or the harness rejected the
+sample. The baseline contains one warm-up and five counterbalanced measured rounds, and Testenix's
+samples ranged from 7.912 to 8.096 seconds.
 
 This is evidence for the tested workload and machine, not a universal claim about every Python
-project. Import-heavy suites, fixture-heavy suites, slow tests, failure output, different operating
-systems, and real repositories still need independent measurements.
+project. Import-heavy suites, fixture-heavy suites, slow tests, failure output, default history,
+alternative pytest-xdist schedulers, different operating systems, and real repositories still need
+independent measurements. No clean Testenix 0.2.1 scaling matrix is checked in yet, so `3.15×` must
+not be presented as a 0.2.1 speedup.
 
 These results do not apply to `testenix pytest`. The compatibility command delegates to pytest and
 has pytest execution performance plus launcher and adapter overhead, which has not yet been
 measured separately.
 
-The new safe-migration baseline is deliberately mixed rather than uniformly positive. For 3,000
+The pre-v0.2 safe-migration baseline is deliberately mixed rather than uniformly positive. For 3,000
 no-op pytest tests across 64 modules, the generated native suite was 2.96x faster than sequential
 pytest. Empty unittest wrappers were 7.40x slower than the sequential stdlib-based outcome probe,
 while the same layout with 1 ms of work in each method was 1.58x faster under four native workers. These are
@@ -2092,6 +2529,7 @@ parallel unittest runners, or a real repository.
 - deterministic rotated execution order instead of always running Testenix last;
 - test-count validation from each runner's final output;
 - disabled pytest plugin autoloading and cache, with pytest-xdist loaded explicitly;
+- pytest-xdist's default `load` distribution rather than `loadfile`, `loadscope`, or `worksteal`;
 - generated-suite working directory, isolated from repository-level pytest configuration;
 - `--no-history` for the primary runner-overhead comparison.
 
@@ -2100,7 +2538,7 @@ median throughput. All checked-in comparison files use one warm-up and five meas
 They also record the clean source commit, lockfile hash, timestamp, CPU model, and installed
 Testenix, pytest, and pytest-xdist versions.
 
-## Results
+## Historical Testenix 0.1.0 results
 
 | Scenario | pytest | pytest-xdist | Native Testenix | Native Testenix advantage |
 |---|---:|---:|---:|---:|
@@ -2108,7 +2546,7 @@ Testenix, pytest, and pytest-xdist versions.
 | 10,000 uneven tests, 16 modules | 3.076 s | 2.138 s | 1.345 s | 2.29x vs pytest |
 | 100,000 no-op tests, 16 modules | 25.333 s | 21.300 s | 8.038 s | 3.15x vs pytest |
 
-The 100,000-test median throughputs were 12,440 tests/s for Testenix, 3,947 tests/s for pytest, and
+The 100,000-test median throughputs were 12,440 tests/s for Testenix 0.1.0, 3,947 tests/s for pytest, and
 4,695 tests/s for pytest-xdist. The raw five-sample ranges and standard deviations are published in
 the generated benchmark page and the checked-in JSON files.
 
@@ -2116,7 +2554,9 @@ In a separate exploratory 100,000-test profile, the coordinator's measured maxim
 approximately 513 MiB after the final manifest/event optimization. Sequential pytest measured
 approximately 520 MiB on the same generated suite. These older macOS `time` figures are not part of
 the current baseline JSON and are process maxima, not aggregate memory across every xdist/Testenix
-child process.
+child process. The console renderer changed substantially after these captures, and the historical
+harness did not record output byte counts. Current schema-version 2 runs do record stdout/stderr
+sizes, but a clean 0.2.1 matrix is still pending.
 
 ### Migrated-suite measurements
 
@@ -2142,15 +2582,35 @@ The no-op unittest row exposes the adapter's fixed cost: each native test is a w
 the unchanged source and translates the result of `TestCase.run()`. The sequential source probe
 uses the stdlib loader and result semantics, then serializes per-test outcomes; it wins
 when the test body does essentially nothing. With 1 ms per method, four-worker execution across 64
-modules amortizes that cost and overtakes the sequential source runner. A suite concentrated in
-one module would expose only one affinity unit, while too many workers can add process and import
-overhead. Test duration, module distribution, imports, fixtures, I/O, failures, operating system,
-and competing parallel runners must all be measured on the target project.
+modules amortizes that cost and overtakes the sequential source runner. By default, a suite
+concentrated in one module exposes only one affinity unit; opt-in safety-checked sharding may change
+that for an independent module. Too many workers can still add process and import overhead. Test
+duration, module distribution, imports, fixtures, I/O, failures, operating system, and competing
+parallel runners must all be measured on the target project.
 
 The generated [benchmark results](https://polishdataengineer.github.io/testenix/benchmarks/results/) publish every sample, range, standard
 deviation, command, environment field, and raw JSON link. These three synthetic records are useful
 for finding overhead boundaries; they are not evidence that converted suites are universally
 faster.
+
+### The 118-test validation was not a benchmark
+
+The [v0.2.0 release notes](https://github.com/polishdataengineer/testenix/releases/tag/v0.2.0)
+reported one final validation observation from a real 118-test pytest project: 3.120 seconds for
+pytest, 2.870 seconds for native serial execution, and 2.423 seconds for native parallel execution.
+Those values correspond to roughly 1.09× and 1.29× for that observation, not 3.15×. They had no
+committed raw rounds, warm-up series, counterbalanced order, or publishable environment manifest,
+so their role was outcome parity (118/118 in all modes), not performance marketing.
+
+A small real suite can differ sharply from the 100,000-test no-op baseline. Interpreter spawn and
+application import costs are a much larger fraction of its wall time; fixtures, mocks, files,
+databases, and actual test bodies dominate framework overhead; and module affinity prevents one
+large module from being split between workers. `workers=auto` is adaptive in current Testenix and
+must be recorded as the worker count actually observed, not assumed to equal logical CPU count.
+For a demonstrably independent large module, opt-in `--shard-modules` can create finer units after
+static safety checks; it is not a safe default for arbitrary module state. Use `testenix tune` for
+a local worker recommendation, then use the real-project manifest harness and publish five
+counterbalanced rounds before drawing a project-specific conclusion.
 
 ### Worker-count sensitivity
 
@@ -2199,6 +2659,9 @@ The optimized profile performed approximately 3.46 million calls. The main chang
 7. Unchanged selected specifications reuse discovered objects; selection events are omitted when
    every test is selected and no effective contract changed.
 8. JSONL keeps one append descriptor for the run rather than performing open/close per event.
+9. An explicit trusted collection manifest can remove the collection-side import from later
+   unchanged runs. Roots, the complete file inventory, and every source SHA-256 are verified first;
+   stale manifests fall back to supervised collection. Execution still imports assigned modules.
 
 Correctness was retained throughout: the framework's full resilience suite passes after every
 optimization, including worker crashes, timeout process-tree cleanup, collection crashes/hangs,
@@ -2243,6 +2706,9 @@ Relevant upstream constraints are documented in the
 
 ## Next measurement gates
 
+- publish the clean Testenix 0.2.1 dimension-sweep matrix for 100/500/1,000/3,000 tests,
+  balanced/dominant/single-module layouts, 1/2/4/adaptive-auto workers, and both history modes;
+- compare pytest-xdist `load`, `loadfile`, `loadscope`, and `worksteal` where each strategy is valid;
 - collection, execution, IPC-byte, process-start, CPU, and aggregate-memory telemetry;
 - 1,000/10,000/100,000 tests across 1, 16, 1,000, and 10,000 modules;
 - synchronous and asynchronous fixtures, failures, captured output, timeouts, and retries;
@@ -2251,12 +2717,14 @@ Relevant upstream constraints are documented in the
 - real migrated pytest and unittest suites, including sequential and established parallel source
   runners, multiple module layouts, and a break-even curve by median test duration;
 - checkpoint-batched IPC followed by another profile;
-- persistent workers that collect and execute without importing every module twice.
+- measure trusted-manifest hit and stale-fallback paths on import-heavy real projects, and consider
+  a persistent collect-and-execute worker only if the remaining execution import is still material.
 
-No universal “always faster than pytest” statement should be published until the real-project and
-cross-platform gates pass. The supported claim today is narrower: Testenix is materially faster in the
-measured native large passing-suite scenarios while retaining supervised isolation and complete
-results.
+No universal “always faster than pytest” statement should be published until the current-version,
+real-project, and cross-platform gates pass. The supported claim today is historical and narrower:
+Testenix 0.1.0 was materially faster in the recorded native large passing-suite scenarios while
+retaining supervised isolation and complete results. Testenix 0.2.1 has no checked-in speedup claim
+yet.
 
 ---
 
@@ -2322,11 +2790,11 @@ test outcomes. A retry never overwrites an earlier attempt, infrastructure failu
 from test failures, and setup/call/teardown are preserved as separate phases.
 
 ```text
-Authoring API -> supervised collection -> inert manifest -> affinity scheduler -> process workers
-                                                                  |          -> streamed attempts
-                                                                  +----------> append-only events
-                                                                              -> reducer
-                                                                              -> reports/history
+Authoring API -> supervised collection -------> inert manifest -> scheduler -> process workers
+                 ^                                  ^               |             -> streamed attempts
+                 |                                  |               +------------> append-only events
+trusted manifest +-- roots/inventory/SHA-256 verify                                -> reducer
+       exact match bypasses collection imports                                     -> reports/history
 ```
 
 ## Dependency rules
@@ -2335,6 +2803,9 @@ Authoring API -> supervised collection -> inert manifest -> affinity scheduler -
 - `api`, `discovery`, `fixtures`, and `executor` form the native engine.
 - `events`, `aggregate`, and `scheduler` remain engine-independent.
 - `runner` is the application service connecting the native engine with execution policy.
+- `tuning` models adaptive worker selection and runs explicit project-local candidate measurements.
+- `sharding` contains fail-closed static module decisions and the versioned trusted-manifest
+  serialization/verification boundary.
 - reporters and storage consume completed domain results or versioned events.
 - optional compatibility adapters stay at the CLI boundary; the native core never imports pytest.
 - migration analyzers depend on serializable migration contracts, while shadow execution and
@@ -2348,6 +2819,10 @@ Authoring API -> supervised collection -> inert manifest -> affinity scheduler -
 - fixture scopes: test, module, session, with broader scopes currently bounded by a worker shard;
 - sequential and local process execution;
 - deterministic scheduling based on historical durations;
+- adaptive `workers = "auto"` capped by real execution units, history-informed predicted makespan,
+  process-start cost, and CPU capacity;
+- explicit project-local worker tuning, conservative opt-in intra-module sharding, and an
+  explicitly generated source-verified collection manifest;
 - append-only JSONL events and a pure reducer;
 - console, JSON, and JUnit output plus local SQLite duration history;
 - retries represented as immutable attempts and finalized as `FLAKY` when appropriate;
@@ -2363,10 +2838,16 @@ plugin SDK are deliberately outside version 0.2.
 
 ## Fixture scopes and process isolation
 
-The scheduler treats every normal test module as one affinity unit and never splits that unit
-between parallel shared workers. Multiple modules assigned to one shard execute in one persistent
-process and fixture runtime. A test with an explicit timeout (including a global timeout applied at
-selection) is instead a single-test isolation unit with a hard process deadline.
+By default, the scheduler treats every normal test module as one affinity unit and never splits
+that unit between parallel shared workers. Multiple modules assigned to one shard execute in one
+persistent process and fixture runtime. A test with an explicit timeout (including a global timeout
+applied at selection) is instead a single-test isolation unit with a hard process deadline.
+
+An explicit intra-module sharding policy can turn tests in an eligible module into finer units.
+The static analysis fails closed for module/session fixtures, writes or obvious mutations of module
+globals, and import-time lifecycle behavior. Function-scoped fixtures can be recreated per worker.
+Because arbitrary dynamic calls and external effects cannot be proven safe, passing this policy is
+a caller trust decision; ineligible modules keep normal affinity.
 
 Scope therefore has the following concrete meaning in version 0.2:
 
@@ -2399,6 +2880,15 @@ Collection itself uses the same spawn-based supervisor and returns only a JSON-s
 top-level import crash or deadline becomes a `CollectionIssue`, so user import code cannot exit or
 indefinitely block the coordinator. Timed execution units send a ready handshake after rediscovery;
 the test deadline therefore does not include interpreter startup or module import.
+
+A caller may instead supply a `TrustedCollectionManifest` created by an earlier explicit
+collection. Before using it, Testenix enumerates the current roots and verifies the complete file
+set and every SHA-256 digest. An exact match bypasses collection imports; a stale manifest falls
+back to the supervised collector. Malformed serialized input is rejected at the adapter boundary.
+The manifest also carries prior sharding decisions so collection and scheduling agree. This removes
+one module import per unchanged run, not the execution-worker import needed to reconstruct Python
+objects. Inputs to dynamic collection beyond selected source bytes remain the producer's trust
+responsibility.
 
 Workers normally create a separate POSIX process session (or use recursive tree termination on
 Windows). During migration validation they remain in the validator's process group so an outer
@@ -2443,6 +2933,10 @@ Source: docs/roadmap.md
 
 ## 0.3 — fast feedback
 
+- Adaptive worker selection based on real execution units, duration history, and process cost,
+  plus an explicit project-local `tune`/`benchmark` command.
+- Conservative opt-in intra-module sharding and a source-verified trusted collection manifest that
+  can bypass duplicate collection imports without trusting stale source metadata.
 - Dynamic micro-shards and work stealing.
 - `--last-failed`, watch mode, and failure fingerprints.
 - Test-impact analysis in shadow mode with an explanation for every selection decision.
@@ -2454,7 +2948,7 @@ Source: docs/roadmap.md
 - Expand migration beyond the v0.2 static subset only when new transformations have differential
   semantics tests on real projects.
 - Versioned reporter and selector plugin interfaces.
-- IDE protocol and machine-readable collection manifest.
+- IDE protocol built on the versioned machine-readable collection manifest.
 
 ## Later
 
@@ -2479,6 +2973,31 @@ All notable changes will be documented in this file. The format follows Keep a C
 project intends to use Semantic Versioning once its public API reaches stability.
 
 ## [Unreleased]
+
+### Added
+
+- `testenix tune` and its `testenix benchmark` alias for fresh-process, counterbalanced,
+  history-disabled native worker-candidate measurements, native inventory/outcome validation,
+  JSON reports, and explicit `--write` persistence of the measured recommendation.
+- Explicit `--shard-modules` / `shard_modules = true` support for splitting eligible modules into
+  finer execution units. Conservative static checks retain module affinity for module/session
+  fixtures, visible global mutation, and import-time lifecycle hazards, including eager calls in
+  assignments, decorators, function defaults, and class construction expressions.
+- Versioned trusted collection manifests generated with `testenix manifest ... --output FILE` and
+  consumed with `testenix run --manifest FILE` or `[tool.testenix].manifest`. Exact collection
+  roots, complete source inventory, and SHA-256 digests are verified before collection imports are
+  bypassed; stale manifests fall back to supervised collection.
+- Synthetic scaling-matrix tooling for 100/500/1,000/3,000 tests and balanced, dominant, and
+  single-module layouts, plus a redaction-safe real-project benchmark harness.
+
+### Changed
+
+- `workers = "auto"` now selects adaptively from the actual execution-unit count, available CPUs,
+  duration-history coverage, predicted process-start cost, and makespan instead of equalling the
+  logical CPU count. Explicit integer worker settings remain unchanged.
+- Benchmark documentation labels the historical `3.15×` result with its Testenix 0.1.0 version,
+  four-worker configuration, 100,000-test/16-module synthetic workload, and `--no-history` mode;
+  it is not presented as a current-version or real-project claim.
 
 ## [0.2.1] - 2026-07-21
 
@@ -2632,6 +3151,10 @@ Fields:
 
 Complete collection output, including non-fatal authoring issues.
 
+## `testenix.CollectionManifestError`
+
+A trusted collection manifest is malformed or unsafe to resolve.
+
 ## `testenix.Event`
 
 ```text
@@ -2722,7 +3245,7 @@ Terminal state of one migration transaction.
 ## `testenix.TestenixConfig`
 
 ```text
-TestenixConfig(paths: 'tuple[str, ...]' = ('tests',), workers: "int | Literal['auto']" = 'auto', retries: 'int' = 0, timeout: 'float | None' = None, tags: 'tuple[str, ...]' = (), json_path: 'Path | None' = None, junit_path: 'Path | None' = None, history_path: 'Path | None' = PosixPath('.testenix/history.sqlite3')) -> None
+TestenixConfig(paths: 'tuple[str, ...]' = ('tests',), workers: "int | Literal['auto']" = 'auto', retries: 'int' = 0, timeout: 'float | None' = None, tags: 'tuple[str, ...]' = (), json_path: 'Path | None' = None, junit_path: 'Path | None' = None, history_path: 'Path | None' = PosixPath('.testenix/history.sqlite3'), shard_modules: 'bool' = False, manifest_path: 'Path | None' = None) -> None
 ```
 
 Fields:
@@ -2735,6 +3258,8 @@ Fields:
 - `json_path`: `Path | None`
 - `junit_path`: `Path | None`
 - `history_path`: `Path | None`
+- `shard_modules`: `bool`
+- `manifest_path`: `Path | None`
 
 Validated execution and reporting settings.
 
@@ -2745,7 +3270,7 @@ a worker process without retaining hidden project state.
 ## `testenix.RunResult`
 
 ```text
-RunResult(run_id: 'str', tests: 'tuple[TestResult, ...]', collection_issues: 'tuple[CollectionIssue, ...]', started_at: 'float', finished_at: 'float') -> None
+RunResult(run_id: 'str', tests: 'tuple[TestResult, ...]', collection_issues: 'tuple[CollectionIssue, ...]', started_at: 'float', finished_at: 'float', workers_used: 'int | None' = None, shardable_paths: 'tuple[str, ...]' = ()) -> None
 ```
 
 Fields:
@@ -2755,8 +3280,26 @@ Fields:
 - `collection_issues`: `tuple[CollectionIssue, ...]`
 - `started_at`: `float`
 - `finished_at`: `float`
+- `workers_used`: `int | None`
+- `shardable_paths`: `tuple[str, ...]`
 
-RunResult(run_id: 'str', tests: 'tuple[TestResult, ...]', collection_issues: 'tuple[CollectionIssue, ...]', started_at: 'float', finished_at: 'float')
+RunResult(run_id: 'str', tests: 'tuple[TestResult, ...]', collection_issues: 'tuple[CollectionIssue, ...]', started_at: 'float', finished_at: 'float', workers_used: 'int | None' = None, shardable_paths: 'tuple[str, ...]' = ())
+
+## `testenix.ShardingPolicy`
+
+```text
+ShardingPolicy(intra_module: 'bool' = False) -> None
+```
+
+Fields:
+
+- `intra_module`: `bool`
+
+Core scheduling policy independent of CLI/configuration concerns.
+
+Intra-module sharding is deliberately opt-in.  Callers which do not pass a
+policy, or pass the default instance, retain the original module-affinity
+behaviour exactly.
 
 ## `testenix.Scope`
 
@@ -2816,6 +3359,29 @@ Fields:
 
 Serializable description of one concrete test case.
 
+## `testenix.TrustedCollectionManifest`
+
+```text
+TrustedCollectionManifest(collection_roots: 'tuple[str, ...]', files: 'tuple[SourceFingerprint, ...]', tests: 'tuple[TestSpec, ...]', issues: 'tuple[CollectionIssue, ...]' = (), sharding: 'tuple[ModuleShardingDecision, ...]' = ()) -> None
+```
+
+Fields:
+
+- `collection_roots`: `tuple[str, ...]`
+- `files`: `tuple[SourceFingerprint, ...]`
+- `tests`: `tuple[TestSpec, ...]`
+- `issues`: `tuple[CollectionIssue, ...]`
+- `sharding`: `tuple[ModuleShardingDecision, ...]`
+
+Explicit portable collection result that may bypass collection imports.
+
+This is deliberately not an implicit cache.  A caller creates or loads the
+manifest and opts into trusting it for a run.  Testenix still compares the
+complete test-file inventory and every SHA-256 digest before using it.
+Dynamic collection influenced by anything other than source bytes (for
+example environment variables) remains the manifest producer's trust
+decision.
+
 ## `testenix.ValidationSummary`
 
 ```text
@@ -2866,6 +3432,22 @@ Attach several cases, either explicitly or as a Cartesian product.
 ``@cases(role=["admin", "editor"], active=[True, False])`` creates the
 Cartesian product of the supplied dimensions.
 
+## `testenix.collect_trusted_manifest`
+
+```text
+collect_trusted_manifest(paths: 'Sequence[str] | str', *, project_root: 'str | Path | None' = None) -> 'TrustedCollectionManifest'
+```
+
+Create an explicit collection manifest in a supervised worker process.
+
+## `testenix.deserialize_trusted_collection_manifest`
+
+```text
+deserialize_trusted_collection_manifest(data: 'str | bytes | bytearray | Mapping[str, Any]') -> 'TrustedCollectionManifest'
+```
+
+Decode and validate trusted collection manifest JSON or mapping data.
+
 ## `testenix.discover`
 
 ```text
@@ -2902,7 +3484,7 @@ checked for concurrent changes.
 ## `testenix.run`
 
 ```text
-run(paths: 'Sequence[str] | str | None' = None, config: 'TestenixConfig | None' = None, *, event_sink: 'EventSink | None' = None) -> 'RunResult'
+run(paths: 'Sequence[str] | str | None' = None, config: 'TestenixConfig | None' = None, *, event_sink: 'EventSink | None' = None, sharding_policy: 'ShardingPolicy | None' = None, trusted_manifest: 'TrustedCollectionManifest | None' = None) -> 'RunResult'
 ```
 
 Discover and execute a native Testenix suite.
@@ -2914,10 +3496,18 @@ reduced after execution.
 ## `testenix.run_async`
 
 ```text
-run_async(paths: 'Sequence[str] | str | None' = None, config: 'TestenixConfig | None' = None, *, event_sink: 'EventSink | None' = None) -> 'RunResult'
+run_async(paths: 'Sequence[str] | str | None' = None, config: 'TestenixConfig | None' = None, *, event_sink: 'EventSink | None' = None, sharding_policy: 'ShardingPolicy | None' = None, trusted_manifest: 'TrustedCollectionManifest | None' = None) -> 'RunResult'
 ```
 
 Cancellable embedding facade around the process-oriented coordinator.
+
+## `testenix.serialize_trusted_collection_manifest`
+
+```text
+serialize_trusted_collection_manifest(manifest: 'TrustedCollectionManifest') -> 'str'
+```
+
+Serialize a trusted collection manifest as deterministic JSON.
 
 ## `testenix.skip`
 

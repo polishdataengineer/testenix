@@ -128,6 +128,21 @@ def _expand_paths(
     return sorted(files, key=lambda value: value.as_posix()), issues
 
 
+def enumerate_test_files(
+    paths: str | Path | Iterable[str | Path],
+) -> tuple[tuple[Path, ...], tuple[CollectionIssue, ...]]:
+    """Enumerate collection inputs without importing a Python module.
+
+    This is intentionally a filesystem-only projection used to validate an
+    explicit trusted collection manifest.  Normal discovery still imports
+    modules so dynamic decorators, fixtures, and collection failures retain
+    their established semantics.
+    """
+
+    files, issues = _expand_paths(paths)
+    return tuple(files), tuple(issues)
+
+
 def _module_identity(path: Path) -> tuple[str, Path]:
     package_parts: list[str] = []
     cursor = path.parent
@@ -437,17 +452,11 @@ def _materialise_specs(
     return specs, issues
 
 
-def discover(
+def _discover(
     paths: str | Path | Iterable[str | Path] = ".",
+    *,
+    function_names: frozenset[str] | None = None,
 ) -> CollectionResult:
-    """Discover native tests and fixtures below one or more paths.
-
-    Directories are searched recursively for ``test_*.py``.  An explicitly
-    supplied Python file may have any name, which is useful for focused runs.
-    Inside a module, ``test_*`` functions and functions decorated with
-    ``@test`` (or parameterized with ``@case(s)``) are collected.
-    """
-
     files, issues = _expand_paths(paths)
     registry = FixtureRegistry()
     modules: list[tuple[Path, ModuleType, list[tuple[str, Any]]]] = []
@@ -485,6 +494,17 @@ def discover(
         for name, function in functions:
             if get_fixture_metadata(function) is not None:
                 continue
+            # Locators intentionally store the callable name used in TestSpec.  A
+            # decorator that does not preserve ``__name__`` can make that differ
+            # from the module binding (``test_original`` -> ``wrapped``).  Match
+            # both identities so the execution-side selected discovery remains
+            # equivalent to full collection.
+            if (
+                function_names is not None
+                and name not in function_names
+                and function.__name__ not in function_names
+            ):
+                continue
             metadata = get_test_metadata(function)
             explicitly_parameterized = hasattr(function, CASES_METADATA_ATTR)
             if metadata is None and not name.startswith("test_") and not explicitly_parameterized:
@@ -511,6 +531,40 @@ def discover(
     return CollectionResult(tuple(collected), registry, tuple(issues))
 
 
+def discover(
+    paths: str | Path | Iterable[str | Path] = ".",
+) -> CollectionResult:
+    """Discover native tests and fixtures below one or more paths.
+
+    Directories are searched recursively for ``test_*.py``.  An explicitly
+    supplied Python file may have any name, which is useful for focused runs.
+    Inside a module, ``test_*`` functions and functions decorated with
+    ``@test`` (or parameterized with ``@case(s)``) are collected.
+    """
+
+    return _discover(paths)
+
+
+def discover_selected(
+    path: str | Path,
+    function_names: Iterable[str],
+) -> CollectionResult:
+    """Rediscover only selected functions while registering every fixture.
+
+    Spawned execution workers must import the source module again because user
+    callables and arbitrary case values are intentionally absent from the
+    portable ``TestSpec`` contract.  For an intra-module shard, however, there
+    is no reason to rematerialise every unrelated test and case after import.
+    This projection preserves fixture registration and import failures while
+    limiting test materialisation to the requested function names.
+    """
+
+    selected = frozenset(function_names)
+    if not selected:
+        return CollectionResult((), FixtureRegistry())
+    return _discover(path, function_names=selected)
+
+
 collect = discover
 
 
@@ -527,6 +581,8 @@ __all__ = [
     "CollectionResult",
     "collect",
     "discover",
+    "discover_selected",
     "discover_specs",
+    "enumerate_test_files",
     "load_module",
 ]

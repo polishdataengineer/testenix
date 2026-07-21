@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "name": "private-project",
+  "testenix_version": "0.2.1",
+  "expected_tests": 118,
+  "expected_passed": 118,
+  "warmups": 1,
+  "repeats": 5,
+  "timeout_seconds": 900,
+  "include_project_commit": false,
+  "migration_report": "reports/testenix-migration.json",
+  "fingerprints": {
+    "native": "tests_testenix",
+    "source": "tests"
+  },
+  "environment": {
+    "NO_COLOR": "1",
+    "PYTEST_ADDOPTS": "",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "PYTHONHASHSEED": "0",
+    "TERM": "dumb"
+  },
+  "runners": [
+    {
+      "name": "pytest",
+      "kind": "pytest",
+      "command": [
+        "{python}",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "--",
+        "tests"
+      ]
+    },
+    {
+      "name": "testenix-1-worker",
+      "kind": "testenix",
+      "command": [
+        "{python}",
+        "-m",
+        "testenix",
+        "run",
+        "--workers",
+        "1",
+        "--no-history",
+        "--",
+        "tests_testenix"
+      ]
+    },
+    {
+      "name": "testenix-4-workers",
+      "kind": "testenix",
+      "command": [
+        "{python}",
+        "-m",
+        "testenix",
+        "run",
+        "--workers",
+        "4",
+        "--no-history",
+        "--",
+        "tests_testenix"
+      ]
+    }
+  ]
+}

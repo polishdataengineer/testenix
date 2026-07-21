@@ -127,6 +127,8 @@ class RunResult:
     collection_issues: tuple[CollectionIssue, ...]
     started_at: float
     finished_at: float
+    workers_used: int | None = None
+    shardable_paths: tuple[str, ...] = ()
 
     @property
     def exit_code(self) -> int:

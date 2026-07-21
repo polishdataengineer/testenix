@@ -92,8 +92,11 @@ def schedule_lpt(
     """Assign items with the LPT greedy algorithm.
 
     Items are sorted by decreasing historical duration, then by stable id. Each
-    item goes to the currently lightest shard, with ``shard_id`` breaking load
-    ties. The returned plan is therefore independent of input ordering.
+    item goes to the currently lightest shard. Equal-load shards are ordered by
+    their item count and then ``shard_id``. The item-count tie-break matters for
+    legitimate zero-duration estimates: it keeps every feasible worker busy
+    instead of repeatedly selecting shard zero. The returned plan is therefore
+    independent of input ordering.
 
     ``durations`` is the canonical argument; ``history`` is accepted as an
     ergonomic alias. If no explicit default is supplied, the median known
@@ -136,7 +139,10 @@ def schedule_lpt(
     shard_items: list[list[T]] = [[] for _ in range(shard_count)]
     shard_loads = [0.0] * shard_count
     for estimate, _, item in annotated:
-        shard_id = min(range(shard_count), key=lambda index: (shard_loads[index], index))
+        shard_id = min(
+            range(shard_count),
+            key=lambda index: (shard_loads[index], len(shard_items[index]), index),
+        )
         shard_items[shard_id].append(item)
         shard_loads[shard_id] += estimate
 

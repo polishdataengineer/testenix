@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import statistics
 import time
 import uuid
@@ -10,6 +11,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
 from testenix.aggregate import finalize_status, reduce_events
 from testenix.config import TestenixConfig
@@ -25,7 +27,7 @@ from testenix.contracts import (
     TestResult,
     TestSpec,
 )
-from testenix.discovery import CollectedTest, CollectionResult, discover
+from testenix.discovery import CollectedTest, CollectionResult, discover, discover_selected
 from testenix.events import (
     EventFactory,
     EventSink,
@@ -37,7 +39,21 @@ from testenix.events import (
 from testenix.executor import NativeExecutionError, execute_tests
 from testenix.history import HistoryStore
 from testenix.scheduler import schedule_lpt
+from testenix.sharding import (
+    CollectionManifestError,
+    ModuleShardingDecision,
+    ShardingPolicy,
+    TrustedCollectionManifest,
+    assess_collection_sharding,
+    build_trusted_collection_manifest,
+    deserialize_trusted_collection_manifest,
+    validate_trusted_collection_manifest,
+    verify_trusted_collection_manifest,
+)
 from testenix.worker import ProcessSupervisor, WorkerExecution, WorkItem
+
+if TYPE_CHECKING:
+    from testenix.tuning import SpawnMethod
 
 _RETRYABLE_TEST_STATUSES = frozenset(
     {
@@ -50,6 +66,7 @@ _RETRYABLE_TEST_STATUSES = frozenset(
 _AUTOMATIC_RECOVERY_STATUSES = frozenset({Status.INFRA_ERROR, Status.CRASH})
 _COLLECTION_TIMEOUT = 30.0
 _WORKER_STARTUP_TIMEOUT = 30.0
+_NO_SHARDABLE_PATHS: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +110,7 @@ class _PlannedWork:
 class _CollectionManifest:
     tests: tuple[TestSpec, ...]
     issues: tuple[CollectionIssue, ...]
+    sharding: tuple[ModuleShardingDecision, ...] = ()
 
 
 class _RunEventSink:
@@ -167,23 +185,85 @@ def _portable_spec(spec: TestSpec) -> TestSpec:
     )
 
 
-def _discover_manifest(paths: Sequence[str]) -> _CollectionManifest:
+def _discover_manifest(
+    paths: Sequence[str],
+    analyse_sharding: bool = False,
+) -> _CollectionManifest:
     collection = discover(paths)
     return _CollectionManifest(
         tests=tuple(_portable_spec(item.spec) for item in collection.items),
         issues=collection.issues,
+        sharding=assess_collection_sharding(collection) if analyse_sharding else (),
     )
+
+
+def _discover_trusted_manifest(
+    paths: Sequence[str],
+    project_root: str,
+) -> TrustedCollectionManifest:
+    """Collect and fingerprint inside the same isolated boundary as a run."""
+
+    # ``paths`` are project-relative by contract.  The manifest fingerprinting
+    # code already resolves them against ``project_root``; collection must use
+    # that same base when the caller's current working directory is elsewhere.
+    # This target always runs in a short-lived supervised child process, so the
+    # directory change cannot leak into the coordinator.
+    os.chdir(project_root)
+    collection = discover(paths)
+    return build_trusted_collection_manifest(paths, collection, project_root=project_root)
+
+
+def collect_trusted_manifest(
+    paths: Sequence[str] | str,
+    *,
+    project_root: str | Path | None = None,
+) -> TrustedCollectionManifest:
+    """Create an explicit collection manifest in a supervised worker process."""
+
+    effective_paths = (paths,) if isinstance(paths, str) else tuple(paths)
+    if not effective_paths:
+        raise CollectionManifestError("at least one collection path is required")
+    root = Path.cwd().resolve() if project_root is None else Path(project_root).resolve()
+    supervisor = ProcessSupervisor(start_method="spawn")
+    execution = supervisor.execute(
+        WorkItem(
+            test_id="collection-manifest",
+            target=_discover_trusted_manifest,
+            args=(effective_paths, str(root)),
+            timeout=_COLLECTION_TIMEOUT,
+        )
+    )
+    if execution.status is Status.CANCELLED:
+        raise asyncio.CancelledError
+    if isinstance(execution.value, TrustedCollectionManifest):
+        manifest = validate_trusted_collection_manifest(execution.value)
+        if manifest.issues:
+            details = "; ".join(issue.message for issue in manifest.issues)
+            raise CollectionManifestError(f"collection reported errors: {details}")
+        return manifest
+    error = execution.error
+    message = error.message if error is not None else "collection worker returned no manifest"
+    diagnostics = (
+        (error.traceback if error is not None else None)
+        or execution.stderr
+        or execution.stdout
+        or ""
+    )
+    suffix = f"\n{diagnostics}" if diagnostics else ""
+    raise CollectionManifestError(f"isolated manifest collection failed: {message}{suffix}")
 
 
 def _collect_in_worker(
     paths: Sequence[str],
     supervisor: ProcessSupervisor,
+    *,
+    analyse_sharding: bool = False,
 ) -> _CollectionManifest:
     execution = supervisor.execute(
         WorkItem(
             test_id="collection",
             target=_discover_manifest,
-            args=(tuple(paths),),
+            args=(tuple(paths), analyse_sharding),
             timeout=_COLLECTION_TIMEOUT,
         )
     )
@@ -211,18 +291,42 @@ def _collect_in_worker(
     )
 
 
+def _verified_trusted_collection(
+    trusted_manifest: TrustedCollectionManifest | None,
+    paths: Sequence[str],
+) -> _CollectionManifest | None:
+    """Project a valid explicit manifest, or request normal collection fallback."""
+
+    if trusted_manifest is None:
+        return None
+    try:
+        validated = validate_trusted_collection_manifest(trusted_manifest)
+    except (CollectionManifestError, TypeError, ValueError):
+        return None
+    if not verify_trusted_collection_manifest(validated, paths):
+        return None
+    return _CollectionManifest(
+        tests=validated.tests,
+        issues=validated.issues,
+        sharding=validated.sharding,
+    )
+
+
 def _resolve_locators_in_worker(
     locators: Sequence[_NativeTestLocator],
 ) -> tuple[CollectedTest, ...]:
     """Rediscover tests without pickling arbitrary parameter values."""
 
+    requested_names: dict[str, set[str]] = {}
+    for locator in locators:
+        requested_names.setdefault(locator.path, set()).add(locator.function_name)
     collections: dict[str, CollectionResult] = {}
     indexes: dict[str, dict[str, CollectedTest]] = {}
     resolved: list[CollectedTest] = []
     for locator in locators:
         collection = collections.get(locator.path)
         if collection is None:
-            collection = discover(locator.path)
+            collection = discover_selected(locator.path, requested_names[locator.path])
             collections[locator.path] = collection
             indexes[locator.path] = {item.spec.id: item for item in collection.items}
         if collection.issues:
@@ -321,18 +425,23 @@ def _single_deadline(spec: TestSpec) -> float | None:
 def _execution_units(
     specs: Sequence[TestSpec],
     durations: Mapping[str, float],
+    *,
+    shardable_paths: frozenset[str] = _NO_SHARDABLE_PATHS,
 ) -> tuple[_ExecutionUnit, ...]:
-    """Keep normal modules intact and isolate every hard-timeout test."""
+    """Keep normal modules intact unless an opt-in safety decision allows splitting."""
 
     known = tuple(value for value in durations.values() if value >= 0.0)
     fallback = float(statistics.median(known)) if known else 1.0
     modules: dict[str, list[TestSpec]] = {}
     isolated: list[TestSpec] = []
+    sharded: list[TestSpec] = []
     for spec in specs:
-        if spec.timeout is None:
-            modules.setdefault(spec.path, []).append(spec)
-        else:
+        if spec.timeout is not None:
             isolated.append(spec)
+        elif spec.path in shardable_paths:
+            sharded.append(spec)
+        else:
+            modules.setdefault(spec.path, []).append(spec)
 
     units: list[_ExecutionUnit] = []
     for path, module_specs in modules.items():
@@ -344,6 +453,14 @@ def _execution_units(
                 estimated_duration=sum(durations.get(spec.id, fallback) for spec in materialized),
             )
         )
+    units.extend(
+        _ExecutionUnit(
+            id=f"test:{spec.id}",
+            specs=(spec,),
+            estimated_duration=durations.get(spec.id, fallback),
+        )
+        for spec in sharded
+    )
     units.extend(
         _ExecutionUnit(
             id=f"isolated:{spec.id}",
@@ -361,8 +478,9 @@ def _initial_work_plan(
     *,
     worker_count: int,
     durations: Mapping[str, float],
+    shardable_paths: frozenset[str] = _NO_SHARDABLE_PATHS,
 ) -> tuple[tuple[_PlannedWork, ...], ...]:
-    units = _execution_units(specs, durations)
+    units = _execution_units(specs, durations, shardable_paths=shardable_paths)
     if not units:
         return ()
     unit_durations = {unit.id: unit.estimated_duration for unit in units}
@@ -591,11 +709,13 @@ def _execute_initial_attempts(
     worker_count: int,
     durations: Mapping[str, float],
     supervisor: ProcessSupervisor,
-) -> tuple[TestResult, ...]:
+    shardable_paths: frozenset[str] = _NO_SHARDABLE_PATHS,
+) -> tuple[tuple[TestResult, ...], int]:
     plan = _initial_work_plan(
         specs,
         worker_count=worker_count,
         durations=durations,
+        shardable_paths=shardable_paths,
     )
     executions = supervisor.execute_shards(
         tuple(tuple(work.item for work in shard) for shard in plan)
@@ -604,7 +724,7 @@ def _execute_initial_attempts(
     for planned_shard, shard_executions in zip(plan, executions, strict=True):
         for work, execution in zip(planned_shard, shard_executions, strict=True):
             results.extend(_results_from_batch_execution(work.specs, 1, execution))
-    return tuple(results)
+    return tuple(results), len(plan)
 
 
 def _execute_retry_attempts(
@@ -613,7 +733,7 @@ def _execute_retry_attempts(
     worker_count: int,
     durations: Mapping[str, float],
     supervisor: ProcessSupervisor,
-) -> tuple[TestResult, ...]:
+) -> tuple[tuple[TestResult, ...], int]:
     shards = tuple(
         shard
         for shard in schedule_lpt(
@@ -662,7 +782,7 @@ def _execute_retry_attempts(
                 results.append(_merge_outer_output(result, execution))
             else:
                 results.append(_failure_for_execution(item.spec, item.attempt, execution))
-    return tuple(results)
+    return tuple(results), len(work_shards)
 
 
 def _emit_attempt(factory: EventFactory, sink: EventSink, result: TestResult) -> None:
@@ -702,6 +822,8 @@ def run(
     config: TestenixConfig | None = None,
     *,
     event_sink: EventSink | None = None,
+    sharding_policy: ShardingPolicy | None = None,
+    trusted_manifest: TrustedCollectionManifest | None = None,
 ) -> RunResult:
     """Discover and execute a native Testenix suite.
 
@@ -710,7 +832,13 @@ def run(
     reduced after execution.
     """
 
-    return _run(paths, config, event_sink=event_sink)
+    return _run(
+        paths,
+        config,
+        event_sink=event_sink,
+        sharding_policy=sharding_policy,
+        trusted_manifest=trusted_manifest,
+    )
 
 
 def _run(
@@ -718,10 +846,28 @@ def _run(
     config: TestenixConfig | None,
     *,
     event_sink: EventSink | None,
+    sharding_policy: ShardingPolicy | None = None,
+    trusted_manifest: TrustedCollectionManifest | None = None,
     supervisor: ProcessSupervisor | None = None,
 ) -> RunResult:
-
     effective_config = config or TestenixConfig()
+    policy = (
+        ShardingPolicy(intra_module=effective_config.shard_modules)
+        if sharding_policy is None
+        else sharding_policy
+    )
+    if not isinstance(policy, ShardingPolicy):
+        raise TypeError("sharding_policy must be a ShardingPolicy or None")
+    active_trusted_manifest = trusted_manifest
+    if active_trusted_manifest is None and effective_config.manifest_path is not None:
+        try:
+            active_trusted_manifest = deserialize_trusted_collection_manifest(
+                effective_config.manifest_path.read_bytes()
+            )
+        except OSError as error:
+            raise CollectionManifestError(
+                f"cannot read collection manifest {effective_config.manifest_path}: {error}"
+            ) from error
     if paths is None:
         effective_paths = effective_config.paths
     elif isinstance(paths, str):
@@ -748,7 +894,13 @@ def _run(
         )
     )
     sink.emit(factory.create(EventType.COLLECTION_STARTED, payload={"paths": effective_paths}))
-    collection = _collect_in_worker(effective_paths, active_supervisor)
+    collection = _verified_trusted_collection(active_trusted_manifest, effective_paths)
+    if collection is None:
+        collection = _collect_in_worker(
+            effective_paths,
+            active_supervisor,
+            analyse_sharding=policy.intra_module,
+        )
     selected = _effective_specs(collection.tests, effective_config)
     issues = list(collection.issues)
     if not collection.tests and not issues:
@@ -805,16 +957,39 @@ def _run(
     order = {spec.id: index for index, spec in enumerate(selected)}
     user_retries_left = {spec.id: effective_config.retries for spec in selected}
     infrastructure_recovery_used = {spec.id: False for spec in selected}
+    worker_limit = 0
+    workers_used = 0
+    shardable_paths = _NO_SHARDABLE_PATHS
 
     if selected:
         durations = _duration_history(effective_config, selected)
-        worker_count = min(len(selected), effective_config.resolved_workers)
-        first_results = _execute_initial_attempts(
+        shardable_paths = (
+            frozenset(decision.path for decision in collection.sharding if decision.eligible)
+            if policy.intra_module
+            else _NO_SHARDABLE_PATHS
+        )
+        schedulable_units = _execution_units(
             selected,
-            worker_count=worker_count,
+            durations,
+            shardable_paths=shardable_paths,
+        )
+        worker_limit = min(
+            len(schedulable_units),
+            effective_config.resolve_workers(
+                selected,
+                durations,
+                spawn_method=cast("SpawnMethod", active_supervisor.start_method),
+                shardable_paths=shardable_paths,
+            ),
+        )
+        first_results, initial_workers_used = _execute_initial_attempts(
+            selected,
+            worker_count=worker_limit,
             durations=durations,
             supervisor=active_supervisor,
+            shardable_paths=shardable_paths,
         )
+        workers_used = max(workers_used, initial_workers_used)
         first_results = tuple(sorted(first_results, key=lambda result: order[result.test.id]))
         for result in first_results:
             attempts_by_test[result.test.id].append(result.attempts[-1])
@@ -837,12 +1012,13 @@ def _run(
                 pending.append(_PendingAttempt(spec, 2))
 
         while pending:
-            retry_results = _execute_retry_attempts(
+            retry_results, retry_workers_used = _execute_retry_attempts(
                 pending,
-                worker_count=worker_count,
+                worker_count=worker_limit,
                 durations=durations,
                 supervisor=active_supervisor,
             )
+            workers_used = max(workers_used, retry_workers_used)
             retry_results = tuple(sorted(retry_results, key=lambda result: order[result.test.id]))
             next_pending: list[_PendingAttempt] = []
             for result in retry_results:
@@ -880,12 +1056,20 @@ def _run(
             factory.create(
                 EventType.RUN_FINISHED,
                 timestamp=finished_at,
-                payload={"finished_at": finished_at},
+                payload={
+                    "finished_at": finished_at,
+                    "workers_used": workers_used,
+                    "shardable_paths": tuple(sorted(shardable_paths)),
+                },
             )
         )
     finally:
         sink.close()
-    run_result = reduce_events(memory_sink.events, run_id=run_id)
+    run_result = replace(
+        reduce_events(memory_sink.events, run_id=run_id),
+        workers_used=workers_used,
+        shardable_paths=tuple(sorted(shardable_paths)),
+    )
     if effective_config.history_path is not None:
         with HistoryStore(effective_config.history_path) as history:
             history.record_run(run_result)
@@ -897,6 +1081,8 @@ async def run_async(
     config: TestenixConfig | None = None,
     *,
     event_sink: EventSink | None = None,
+    sharding_policy: ShardingPolicy | None = None,
+    trusted_manifest: TrustedCollectionManifest | None = None,
 ) -> RunResult:
     """Cancellable embedding facade around the process-oriented coordinator."""
 
@@ -907,6 +1093,8 @@ async def run_async(
             paths,
             config,
             event_sink=event_sink,
+            sharding_policy=sharding_policy,
+            trusted_manifest=trusted_manifest,
             supervisor=supervisor,
         )
     )
@@ -921,4 +1109,4 @@ async def run_async(
         raise
 
 
-__all__ = ["run", "run_async"]
+__all__ = ["collect_trusted_manifest", "run", "run_async"]

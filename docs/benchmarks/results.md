@@ -5,9 +5,68 @@ evidence for specific synthetic workloads, not a universal claim that Testenix i
 than pytest. `Testenix` in these results means the native `testenix run` engine. The
 `testenix pytest` compatibility bridge delegates to pytest and is not represented here.
 
-![Preliminary Testenix throughput ratios](../_static/benchmark-speedup.svg)
+## Testenix 0.2.1 scaling matrix
 
-## Median wall-clock time
+No current-version matrix is checked in yet. The historical results below must therefore not be
+described as Testenix 0.2.1 performance. The new provenance-gated harness covers
+100/500/1,000/3,000 tests, balanced/dominant/single-module layouts, 1/2/4/auto workers, and both
+default history and `--no-history`, plus explicit safe-module sharding. Its default design uses
+dimension sweeps; use
+`--full-cross-product` only when the much larger run is intentional.
+
+`auto` is passed literally to Testenix and remains adaptive; observed Testenix worker counts are
+stored per sample. pytest-xdist resolves its side of an `auto` row separately to the machine's
+logical CPU count.
+
+```console
+$ uv run --no-editable python benchmarks/run_scaling_matrix.py \
+    --output benchmarks/scaling_matrix_0_2_1.json
+```
+
+The command refuses a dirty worktree or an installed Testenix version that differs from
+`pyproject.toml`. `--allow-dirty` is available only for unpublished smoke runs. A matrix becomes
+publishable here only after five measured rounds, one warm-up, clean commit provenance, and full
+axis coverage pass the documentation generator's validation.
+
+
+## Real-project harness
+
+The 118-test project used during v0.2 migration validation was a semantic parity gate, not a
+publishable benchmark: its release-note timings were single observations without a committed
+multi-round record. Use the redaction-safe manifest harness for a real repository:
+
+```console
+$ cp benchmarks/real_project_manifest.example.json /tmp/testenix-project-benchmark.json
+$ uv run --no-editable python benchmarks/run_project_benchmark.py \
+    --project /absolute/path/to/project \
+    --manifest /tmp/testenix-project-benchmark.json \
+    --output /tmp/testenix-project-result.json
+```
+
+The manifest stores argument arrays, never shell fragments. The result omits stdout, stderr,
+environment values, absolute project paths, and private source. It records only timings, aggregate
+output sizes, optional tree fingerprints, and redacted Git provenance. A migrated-suite comparison
+must point the manifest at a successful migration report to become publication-eligible. The
+harness verifies the report's exact per-test inventory and outcomes, complete source and generated
+Python-file inventories, current hashes, and binds canonical `python -m pytest` /
+`python -m testenix run` commands to the report's source/output roots. Publishable source roots are
+directories so support files such as `conftest.py` are covered. Without the report the result is
+diagnostic-only. Commands are retained for
+reproducibility. Publishable commands put options before `--` and exact suite targets after it, so
+an option value cannot impersonate a migration root. Keep secrets in the environment or list
+sensitive argument indexes in `redact_arguments`.
+
+
+## Historical Testenix 0.1.0 synthetic baseline
+
+The checked-in `3.15×` figure is a Testenix 0.1.0 result for 100,000 generated no-op
+tests across 16 modules, four workers, disabled history (`--no-history`), and pytest-xdist's default
+`load` strategy. It is retained as transparent historical evidence; it is not a measurement of
+Testenix 0.2.1.
+
+![Historical Testenix 0.1.0 throughput ratios](../_static/benchmark-speedup.svg)
+
+### Median wall-clock time
 
 Lower time is better. A speedup of `2.85×` means pytest's median
 wall time was 2.85 times the Testenix median for that exact
@@ -24,19 +83,24 @@ The 100,000-test result meets the project's local five-run, one-warmup minimum.
 It remains a synthetic result from one machine, not a universal performance promise.
 </div>
 
-## Environment
+### Environment and controls
 
 - CPU: Apple M4 Pro (14 logical CPUs)
 - Machine: `arm64`
 - Platform: `macOS-26.5.1-arm64-arm-64bit`
 - Python: `3.11.14`
+- Testenix: `0.1.0`
+- Workers: four for Testenix and pytest-xdist
+- Testenix history: disabled with `--no-history`
+- pytest-xdist: version `3.8.0`,
+  default `load` distribution
 - Measurement: complete subprocess wall-clock time, including discovery, execution, aggregation,
   and console rendering
 - Correctness gate: every command had to exit successfully and report the expected test count
 
 
 
-## Raw samples and variance
+### Raw samples and variance
 
 ### 10,000 no-op tests / 16 modules
 
@@ -51,6 +115,8 @@ It remains a synthetic result from one machine, not a universal performance prom
 - pytest-xdist raw samples: 2.170, 2.267, 2.077, 2.075, 2.106 seconds
 - Measured rounds: 5; warmups: 1
 - Workers: 4
+- Testenix history: disabled with `--no-history`
+- pytest-xdist strategy: default `load`
 - Recorded at: `2026-07-20T12:12:43.635798+00:00`
 - Commit: `8f24f8a7bd72fa876988a8ce96364be97e35c2b6`
 - Clean working tree at capture: yes
@@ -69,6 +135,8 @@ It remains a synthetic result from one machine, not a universal performance prom
 - pytest-xdist raw samples: 2.146, 2.129, 2.109, 2.138, 2.176 seconds
 - Measured rounds: 5; warmups: 1
 - Workers: 4
+- Testenix history: disabled with `--no-history`
+- pytest-xdist strategy: default `load`
 - Recorded at: `2026-07-20T12:13:53.369799+00:00`
 - Commit: `18d9bba6cb5c8e39c2d5b211ee4384ae8f824524`
 - Clean working tree at capture: yes
@@ -87,6 +155,8 @@ It remains a synthetic result from one machine, not a universal performance prom
 - pytest-xdist raw samples: 21.239, 21.120, 22.216, 21.300, 21.949 seconds
 - Measured rounds: 5; warmups: 1
 - Workers: 4
+- Testenix history: disabled with `--no-history`
+- pytest-xdist strategy: default `load`
 - Recorded at: `2026-07-20T12:19:39.942492+00:00`
 - Commit: `24b877c2f98420e91dcd2c8bcbc9417c7cf1ac96`
 - Clean working tree at capture: yes
@@ -97,7 +167,9 @@ It remains a synthetic result from one machine, not a universal performance prom
 These separate measurements start with generated pytest or unittest sources, complete one safe
 copy-and-validate migration, and then compare recurring source-suite runs with recurring native
 Testenix runs. The migration transaction is a one-time cost shown separately; it is not included
-in either execution median.
+in either execution median. These records came from the pre-v0.2 source commit linked below; its
+distribution metadata still reported `0.1.0`. They are historical evidence, not measurements of
+the current release.
 
 | Source runner | Workload | Tests / modules | Source median | Native median | Native vs source | Migration transaction |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
@@ -191,9 +263,9 @@ therefore material, and none of these synthetic rows predicts a specific real pr
 
 ## Interpretation
 
-The checked-in results show that Testenix has low per-test overhead for large generated suites and
-that its built-in process model is competitive with both sequential pytest and pytest-xdist in
-those scenarios.
+The historical checked-in results show that Testenix 0.1.0 had low per-test overhead for the large
+generated suites above and was competitive with sequential pytest and pytest-xdist's default
+`load` strategy in those scenarios. They are not evidence for the current release.
 
 They do **not** yet answer how Testenix performs for import-heavy applications, complex fixture
 graphs, assertion failures, real repositories, or different operating systems. Pytest also has a

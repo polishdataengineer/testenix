@@ -14,11 +14,19 @@ from testenix.migration_service import (
     ValidationSummary,
     migrate,
 )
-from testenix.runner import run, run_async
+from testenix.runner import collect_trusted_manifest, run, run_async
+from testenix.sharding import (
+    CollectionManifestError,
+    ShardingPolicy,
+    TrustedCollectionManifest,
+    deserialize_trusted_collection_manifest,
+    serialize_trusted_collection_manifest,
+)
 
 __all__ = [
     "CaseDefinition",
     "CollectionResult",
+    "CollectionManifestError",
     "Event",
     "EventSink",
     "MigrationOptions",
@@ -26,18 +34,23 @@ __all__ = [
     "MigrationStatus",
     "TestenixConfig",
     "RunResult",
+    "ShardingPolicy",
     "Scope",
     "Status",
     "TestResult",
     "TestSpec",
+    "TrustedCollectionManifest",
     "ValidationSummary",
     "case",
     "cases",
+    "collect_trusted_manifest",
+    "deserialize_trusted_collection_manifest",
     "discover",
     "fixture",
     "migrate",
     "run",
     "run_async",
+    "serialize_trusted_collection_manifest",
     "skip",
     "test",
     "xfail",

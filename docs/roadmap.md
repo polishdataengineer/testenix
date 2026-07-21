@@ -28,6 +28,10 @@
 
 ## 0.3 — fast feedback
 
+- Adaptive worker selection based on real execution units, duration history, and process cost,
+  plus an explicit project-local `tune`/`benchmark` command.
+- Conservative opt-in intra-module sharding and a source-verified trusted collection manifest that
+  can bypass duplicate collection imports without trusting stale source metadata.
 - Dynamic micro-shards and work stealing.
 - `--last-failed`, watch mode, and failure fingerprints.
 - Test-impact analysis in shadow mode with an explanation for every selection decision.
@@ -39,7 +43,7 @@
 - Expand migration beyond the v0.2 static subset only when new transformations have differential
   semantics tests on real projects.
 - Versioned reporter and selector plugin interfaces.
-- IDE protocol and machine-readable collection manifest.
+- IDE protocol built on the versioned machine-readable collection manifest.
 
 ## Later
 

@@ -2,22 +2,25 @@
 
 ## Executive summary
 
-The optimized native v0.1 `testenix run` engine is faster than pytest and pytest-xdist in the checked-in synthetic
-large-suite scenarios. The largest recorded comparison is 100,000 passing tests across 16 modules:
-Testenix completed the suite in a median 8.038 seconds, pytest in 25.333 seconds, and pytest-xdist
-in 21.300 seconds. Every measured command had to report the expected test count or the harness
-rejected the sample. The baseline contains one warm-up and five counterbalanced measured rounds,
-and Testenix's samples ranged from 7.912 to 8.096 seconds.
+The checked-in headline numbers are a **historical Testenix 0.1.0 synthetic baseline**, not current
+Testenix 0.2.1 results. In the largest recorded comparison, 100,000 generated no-op tests were spread
+evenly across 16 modules and run with four workers and `--no-history`. Testenix completed the suite
+in a median 8.038 seconds, pytest in 25.333 seconds, and pytest-xdist 3.8's default `load` scheduler
+in 21.300 seconds. Every command had to report the expected test count or the harness rejected the
+sample. The baseline contains one warm-up and five counterbalanced measured rounds, and Testenix's
+samples ranged from 7.912 to 8.096 seconds.
 
 This is evidence for the tested workload and machine, not a universal claim about every Python
-project. Import-heavy suites, fixture-heavy suites, slow tests, failure output, different operating
-systems, and real repositories still need independent measurements.
+project. Import-heavy suites, fixture-heavy suites, slow tests, failure output, default history,
+alternative pytest-xdist schedulers, different operating systems, and real repositories still need
+independent measurements. No clean Testenix 0.2.1 scaling matrix is checked in yet, so `3.15×` must
+not be presented as a 0.2.1 speedup.
 
 These results do not apply to `testenix pytest`. The compatibility command delegates to pytest and
 has pytest execution performance plus launcher and adapter overhead, which has not yet been
 measured separately.
 
-The new safe-migration baseline is deliberately mixed rather than uniformly positive. For 3,000
+The pre-v0.2 safe-migration baseline is deliberately mixed rather than uniformly positive. For 3,000
 no-op pytest tests across 64 modules, the generated native suite was 2.96x faster than sequential
 pytest. Empty unittest wrappers were 7.40x slower than the sequential stdlib-based outcome probe,
 while the same layout with 1 ms of work in each method was 1.58x faster under four native workers. These are
@@ -35,6 +38,7 @@ parallel unittest runners, or a real repository.
 - deterministic rotated execution order instead of always running Testenix last;
 - test-count validation from each runner's final output;
 - disabled pytest plugin autoloading and cache, with pytest-xdist loaded explicitly;
+- pytest-xdist's default `load` distribution rather than `loadfile`, `loadscope`, or `worksteal`;
 - generated-suite working directory, isolated from repository-level pytest configuration;
 - `--no-history` for the primary runner-overhead comparison.
 
@@ -43,7 +47,7 @@ median throughput. All checked-in comparison files use one warm-up and five meas
 They also record the clean source commit, lockfile hash, timestamp, CPU model, and installed
 Testenix, pytest, and pytest-xdist versions.
 
-## Results
+## Historical Testenix 0.1.0 results
 
 | Scenario | pytest | pytest-xdist | Native Testenix | Native Testenix advantage |
 |---|---:|---:|---:|---:|
@@ -51,7 +55,7 @@ Testenix, pytest, and pytest-xdist versions.
 | 10,000 uneven tests, 16 modules | 3.076 s | 2.138 s | 1.345 s | 2.29x vs pytest |
 | 100,000 no-op tests, 16 modules | 25.333 s | 21.300 s | 8.038 s | 3.15x vs pytest |
 
-The 100,000-test median throughputs were 12,440 tests/s for Testenix, 3,947 tests/s for pytest, and
+The 100,000-test median throughputs were 12,440 tests/s for Testenix 0.1.0, 3,947 tests/s for pytest, and
 4,695 tests/s for pytest-xdist. The raw five-sample ranges and standard deviations are published in
 the generated benchmark page and the checked-in JSON files.
 
@@ -59,7 +63,9 @@ In a separate exploratory 100,000-test profile, the coordinator's measured maxim
 approximately 513 MiB after the final manifest/event optimization. Sequential pytest measured
 approximately 520 MiB on the same generated suite. These older macOS `time` figures are not part of
 the current baseline JSON and are process maxima, not aggregate memory across every xdist/Testenix
-child process.
+child process. The console renderer changed substantially after these captures, and the historical
+harness did not record output byte counts. Current schema-version 2 runs do record stdout/stderr
+sizes, but a clean 0.2.1 matrix is still pending.
 
 ### Migrated-suite measurements
 
@@ -85,15 +91,35 @@ The no-op unittest row exposes the adapter's fixed cost: each native test is a w
 the unchanged source and translates the result of `TestCase.run()`. The sequential source probe
 uses the stdlib loader and result semantics, then serializes per-test outcomes; it wins
 when the test body does essentially nothing. With 1 ms per method, four-worker execution across 64
-modules amortizes that cost and overtakes the sequential source runner. A suite concentrated in
-one module would expose only one affinity unit, while too many workers can add process and import
-overhead. Test duration, module distribution, imports, fixtures, I/O, failures, operating system,
-and competing parallel runners must all be measured on the target project.
+modules amortizes that cost and overtakes the sequential source runner. By default, a suite
+concentrated in one module exposes only one affinity unit; opt-in safety-checked sharding may change
+that for an independent module. Too many workers can still add process and import overhead. Test
+duration, module distribution, imports, fixtures, I/O, failures, operating system, and competing
+parallel runners must all be measured on the target project.
 
 The generated [benchmark results](benchmarks/results.md) publish every sample, range, standard
 deviation, command, environment field, and raw JSON link. These three synthetic records are useful
 for finding overhead boundaries; they are not evidence that converted suites are universally
 faster.
+
+### The 118-test validation was not a benchmark
+
+The [v0.2.0 release notes](https://github.com/polishdataengineer/testenix/releases/tag/v0.2.0)
+reported one final validation observation from a real 118-test pytest project: 3.120 seconds for
+pytest, 2.870 seconds for native serial execution, and 2.423 seconds for native parallel execution.
+Those values correspond to roughly 1.09× and 1.29× for that observation, not 3.15×. They had no
+committed raw rounds, warm-up series, counterbalanced order, or publishable environment manifest,
+so their role was outcome parity (118/118 in all modes), not performance marketing.
+
+A small real suite can differ sharply from the 100,000-test no-op baseline. Interpreter spawn and
+application import costs are a much larger fraction of its wall time; fixtures, mocks, files,
+databases, and actual test bodies dominate framework overhead; and module affinity prevents one
+large module from being split between workers. `workers=auto` is adaptive in current Testenix and
+must be recorded as the worker count actually observed, not assumed to equal logical CPU count.
+For a demonstrably independent large module, opt-in `--shard-modules` can create finer units after
+static safety checks; it is not a safe default for arbitrary module state. Use `testenix tune` for
+a local worker recommendation, then use the real-project manifest harness and publish five
+counterbalanced rounds before drawing a project-specific conclusion.
 
 ### Worker-count sensitivity
 
@@ -142,6 +168,9 @@ The optimized profile performed approximately 3.46 million calls. The main chang
 7. Unchanged selected specifications reuse discovered objects; selection events are omitted when
    every test is selected and no effective contract changed.
 8. JSONL keeps one append descriptor for the run rather than performing open/close per event.
+9. An explicit trusted collection manifest can remove the collection-side import from later
+   unchanged runs. Roots, the complete file inventory, and every source SHA-256 are verified first;
+   stale manifests fall back to supervised collection. Execution still imports assigned modules.
 
 Correctness was retained throughout: the framework's full resilience suite passes after every
 optimization, including worker crashes, timeout process-tree cleanup, collection crashes/hangs,
@@ -186,6 +215,9 @@ Relevant upstream constraints are documented in the
 
 ## Next measurement gates
 
+- publish the clean Testenix 0.2.1 dimension-sweep matrix for 100/500/1,000/3,000 tests,
+  balanced/dominant/single-module layouts, 1/2/4/adaptive-auto workers, and both history modes;
+- compare pytest-xdist `load`, `loadfile`, `loadscope`, and `worksteal` where each strategy is valid;
 - collection, execution, IPC-byte, process-start, CPU, and aggregate-memory telemetry;
 - 1,000/10,000/100,000 tests across 1, 16, 1,000, and 10,000 modules;
 - synchronous and asynchronous fixtures, failures, captured output, timeouts, and retries;
@@ -194,9 +226,11 @@ Relevant upstream constraints are documented in the
 - real migrated pytest and unittest suites, including sequential and established parallel source
   runners, multiple module layouts, and a break-even curve by median test duration;
 - checkpoint-batched IPC followed by another profile;
-- persistent workers that collect and execute without importing every module twice.
+- measure trusted-manifest hit and stale-fallback paths on import-heavy real projects, and consider
+  a persistent collect-and-execute worker only if the remaining execution import is still material.
 
-No universal “always faster than pytest” statement should be published until the real-project and
-cross-platform gates pass. The supported claim today is narrower: Testenix is materially faster in the
-measured native large passing-suite scenarios while retaining supervised isolation and complete
-results.
+No universal “always faster than pytest” statement should be published until the current-version,
+real-project, and cross-platform gates pass. The supported claim today is historical and narrower:
+Testenix 0.1.0 was materially faster in the recorded native large passing-suite scenarios while
+retaining supervised isolation and complete results. Testenix 0.2.1 has no checked-in speedup claim
+yet.

@@ -410,6 +410,8 @@ def reduce_events(
     selection_observed = False
     started_at: float | None = None
     finished_at: float | None = None
+    workers_used: int | None = None
+    shardable_paths: tuple[str, ...] = ()
 
     def remember_spec(
         spec: TestSpec | None, event: Event, *, replace_existing: bool = False
@@ -434,6 +436,16 @@ def reduce_events(
         if event.event_type is EventType.RUN_FINISHED:
             candidate = _finite_number(payload.get("finished_at"), event.timestamp)
             finished_at = candidate if finished_at is None else max(finished_at, candidate)
+            raw_workers = payload.get("workers_used")
+            if (
+                isinstance(raw_workers, int)
+                and not isinstance(raw_workers, bool)
+                and raw_workers >= 0
+            ):
+                workers_used = raw_workers
+            raw_shardable = payload.get("shardable_paths", ())
+            if isinstance(raw_shardable, Iterable) and not isinstance(raw_shardable, (str, bytes)):
+                shardable_paths = tuple(sorted(str(path) for path in raw_shardable))
             continue
         if event.event_type is EventType.COLLECTION_ERROR:
             collection_issues.append(_collection_issue(payload))
@@ -588,6 +600,8 @@ def reduce_events(
         collection_issues=tuple(collection_issues),
         started_at=started_at,
         finished_at=finished_at,
+        workers_used=workers_used,
+        shardable_paths=shardable_paths,
     )
 
 
