@@ -5,6 +5,8 @@ project intends to use Semantic Versioning once its public API reaches stability
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-21
+
 ### Added
 
 - Native console controls for quiet output, one- or two-level verbosity, skipped/expected-failure
@@ -17,6 +19,12 @@ project intends to use Semantic Versioning once its public API reaches stability
   emitted after execution rather than presented as live progress.
 - Documentation now distinguishes native Testenix rendering from the unchanged pytest output
   produced by the transparent `testenix pytest` compatibility bridge.
+
+### Fixed
+
+- Compact reports retain complete failing node IDs and wrap unusually varied per-file status
+  summaries without dropping the file name or any status counts.
+- Generated LLM API snapshots are stable across all supported Python versions.
 
 ## [0.2.0] - 2026-07-20
 

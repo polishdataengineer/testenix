@@ -21,7 +21,7 @@ format rather than an official web standard.
 
 ```text
 Use the following Testenix documentation as the authoritative project reference.
-Distinguish current 0.1 behavior from roadmap items. Treat benchmark results as
+Distinguish current documented behavior from roadmap items. Treat benchmark results as
 workload-specific and preserve all documented limitations.
 
 <paste llms-full.txt here>

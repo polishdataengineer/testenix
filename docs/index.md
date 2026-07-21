@@ -139,7 +139,7 @@ $ python -m pip install testenix
 $ testenix run tests
 ```
 
-If the first PyPI release is not available yet, install the current source with
+To evaluate unreleased source changes, install the current `main` branch with
 `python -m pip install "testenix @ git+https://github.com/polishdataengineer/testenix.git@main"`.
 
 ## Performance evidence, with context
