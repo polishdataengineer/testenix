@@ -67,6 +67,46 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="run tests with this tag; repeat for multiple tags",
     )
+    verbosity_group = run_parser.add_mutually_exclusive_group()
+    verbosity_group.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        help="show failures and the final summary only",
+    )
+    verbosity_group.add_argument(
+        "-v",
+        "--verbose",
+        action="count",
+        default=0,
+        help="increase detail; repeat for full captured output",
+    )
+    color_group = run_parser.add_mutually_exclusive_group()
+    color_group.add_argument(
+        "--color",
+        choices=("auto", "always", "never"),
+        default="auto",
+        help="color output: auto, always, or never (default: auto)",
+    )
+    color_group.add_argument(
+        "--no-color",
+        dest="color",
+        action="store_const",
+        const="never",
+        help="alias for --color never",
+    )
+    run_parser.add_argument(
+        "--show-skips",
+        action="store_true",
+        help="show details for skipped and expected-failure tests",
+    )
+    run_parser.add_argument(
+        "--durations",
+        type=_non_negative_int,
+        default=None,
+        metavar="N",
+        help="show the N slowest tests; 0 shows all",
+    )
     run_parser.add_argument("--json", dest="json_path", type=Path, default=None)
     run_parser.add_argument("--junit", dest="junit_path", type=Path, default=None)
     history_group = run_parser.add_mutually_exclusive_group()
@@ -188,7 +228,15 @@ def _run_command(arguments: argparse.Namespace) -> int:
         print("testenix: runner returned an invalid result", file=sys.stderr)
         return EXIT_INTERNAL_ERROR
 
-    ConsoleReporter().write(result)
+    verbosity = -1 if arguments.quiet else min(arguments.verbose, 2)
+    workers = _reporter_worker_count(result, config)
+    ConsoleReporter(
+        verbosity=verbosity,
+        color=arguments.color,
+        show_skips=arguments.show_skips,
+        durations=arguments.durations,
+        workers=workers,
+    ).write(result)
     try:
         if config.json_path is not None:
             JsonReporter(config.json_path).write(result)
@@ -206,6 +254,14 @@ def _call_runner(paths: Sequence[str], config: TestenixConfig) -> RunResult:
     from testenix.runner import run
 
     return run(paths, config)
+
+
+def _reporter_worker_count(result: RunResult, config: TestenixConfig) -> int:
+    """Mirror the native runner's initial module/timeout execution units."""
+
+    shared_modules = {test.test.path for test in result.tests if test.test.timeout is None}
+    isolated_tests = sum(test.test.timeout is not None for test in result.tests)
+    return min(config.resolved_workers, len(shared_modules) + isolated_tests)
 
 
 def _pytest_command(arguments: Sequence[str]) -> int:
@@ -345,6 +401,16 @@ def _positive_float(value: str) -> float:
         raise argparse.ArgumentTypeError("value must be a number") from error
     if parsed <= 0 or not math.isfinite(parsed):
         raise argparse.ArgumentTypeError("value must be a finite number greater than zero")
+    return parsed
+
+
+def _non_negative_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("value must be an integer") from error
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("value must be at least 0")
     return parsed
 
 

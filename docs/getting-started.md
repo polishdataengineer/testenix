@@ -33,7 +33,7 @@ $ python -m pip install "testenix[pytest]"
 $ uv add --dev "testenix[pytest]"
 ```
 
-Until the first PyPI release is visible, install directly from the protected `main` branch:
+To evaluate unreleased development changes, install directly from the protected `main` branch:
 
 ```console
 $ python -m pip install "testenix @ git+https://github.com/polishdataengineer/testenix.git@main"
@@ -46,7 +46,7 @@ $ python -m pip install "testenix[pytest] @ git+https://github.com/polishdataeng
 Run an unchanged pytest suite through its real engine:
 
 ```console
-$ testenix pytest -q tests
+$ testenix pytest -q --tb=short tests
 ```
 
 Use `testenix run` for native Testenix tests and the built-in scheduler, retries, history, and
@@ -83,6 +83,16 @@ Run the suite:
 
 ```console
 $ testenix run tests
+```
+
+The default console output is a compact per-file report followed by complete failure details and a
+final summary. It is rendered deterministically after the run rather than updated as live progress.
+Use `-q` to omit the header and file table, `-v` for one row per test, or `-vv` for worker, attempt,
+and phase metadata. Collection errors and failure details remain visible with `-q`.
+
+```console
+$ testenix run -q tests
+4 tests, 3 passed, 1 skipped in 0.071s
 ```
 
 The process exits with code `0` when every selected test has a non-gating terminal status.

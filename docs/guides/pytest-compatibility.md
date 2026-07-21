@@ -10,7 +10,7 @@ configuration:
 
 ```console
 $ python -m pip install "testenix[pytest]"
-$ testenix pytest -q tests
+$ testenix pytest -q --tb=short tests
 ```
 
 For the supported static subset, `testenix migrate pytest tests` can instead create a validated
@@ -35,6 +35,14 @@ platform does not provide the same overlay semantics. Both paths preserve the fo
 working directory, environment, terminal, standard streams, and pytest's signal handling. Pytest
 therefore remains responsible for collection, execution, configuration, plugin loading, output,
 descendants such as pytest-xdist workers, and exit status.
+
+This also explains the visual style: output from `uv run pytest tests` is rendered by pytest, and
+`testenix pytest` deliberately preserves that same renderer. It does not activate Testenix's
+compact native console. For shorter pytest output with concise tracebacks, use:
+
+```console
+$ testenix pytest -q --tb=short tests
+```
 
 ```console
 $ testenix pytest tests/test_api.py::test_health -k smoke --maxfail=1
@@ -84,12 +92,17 @@ timeouts, tags, history, event model, JSON reporter, or JUnit reporter. Pass the
 pytest or plugin options after the subcommand. For example, use pytest's `--junitxml`, not
 Testenix's native `--junit`.
 
+Native presentation options are not interpreted by the bridge either. Arguments such as `-q`,
+`-v`, `--color`, `--show-skips`, and `--durations` go straight to pytest and follow pytest's syntax
+and semantics. For example, pytest uses `-rs` for skipped reasons, `--durations=N` for its slowest
+tests list, and `--color=yes|no|auto`; Testenix does not translate the native spellings.
+
 Pytest and every required plugin must be installed beside the `testenix` executable in the same
 interpreter environment. For uv-managed projects, prefer:
 
 ```console
 $ uv add --dev "testenix[pytest]"
-$ uv run testenix pytest -q tests
+$ uv run testenix pytest -q --tb=short tests
 ```
 
 An isolated `uv tool install testenix` environment does not automatically see pytest plugins from

@@ -223,7 +223,7 @@ $ python -m pip install "testenix[pytest]"
 $ uv add --dev "testenix[pytest]"
 ```
 
-Until the first PyPI release is visible, install directly from the protected `main` branch:
+To evaluate unreleased development changes, install directly from the protected `main` branch:
 
 ```console
 $ python -m pip install "testenix @ git+https://github.com/polishdataengineer/testenix.git@main"
@@ -236,7 +236,7 @@ $ python -m pip install "testenix[pytest] @ git+https://github.com/polishdataeng
 Run an unchanged pytest suite through its real engine:
 
 ```console
-$ testenix pytest -q tests
+$ testenix pytest -q --tb=short tests
 ```
 
 Use `testenix run` for native Testenix tests and the built-in scheduler, retries, history, and
@@ -273,6 +273,16 @@ Run the suite:
 
 ```console
 $ testenix run tests
+```
+
+The default console output is a compact per-file report followed by complete failure details and a
+final summary. It is rendered deterministically after the run rather than updated as live progress.
+Use `-q` to omit the header and file table, `-v` for one row per test, or `-vv` for worker, attempt,
+and phase metadata. Collection errors and failure details remain visible with `-q`.
+
+```console
+$ testenix run -q tests
+4 tests, 3 passed, 1 skipped in 0.071s
 ```
 
 The process exits with code `0` when every selected test has a non-gating terminal status.
@@ -363,7 +373,7 @@ configuration:
 
 ```console
 $ python -m pip install "testenix[pytest]"
-$ testenix pytest -q tests
+$ testenix pytest -q --tb=short tests
 ```
 
 For the supported static subset, `testenix migrate pytest tests` can instead create a validated
@@ -388,6 +398,14 @@ platform does not provide the same overlay semantics. Both paths preserve the fo
 working directory, environment, terminal, standard streams, and pytest's signal handling. Pytest
 therefore remains responsible for collection, execution, configuration, plugin loading, output,
 descendants such as pytest-xdist workers, and exit status.
+
+This also explains the visual style: output from `uv run pytest tests` is rendered by pytest, and
+`testenix pytest` deliberately preserves that same renderer. It does not activate Testenix's
+compact native console. For shorter pytest output with concise tracebacks, use:
+
+```console
+$ testenix pytest -q --tb=short tests
+```
 
 ```console
 $ testenix pytest tests/test_api.py::test_health -k smoke --maxfail=1
@@ -437,12 +455,17 @@ timeouts, tags, history, event model, JSON reporter, or JUnit reporter. Pass the
 pytest or plugin options after the subcommand. For example, use pytest's `--junitxml`, not
 Testenix's native `--junit`.
 
+Native presentation options are not interpreted by the bridge either. Arguments such as `-q`,
+`-v`, `--color`, `--show-skips`, and `--durations` go straight to pytest and follow pytest's syntax
+and semantics. For example, pytest uses `-rs` for skipped reasons, `--durations=N` for its slowest
+tests list, and `--color=yes|no|auto`; Testenix does not translate the native spellings.
+
 Pytest and every required plugin must be installed beside the `testenix` executable in the same
 interpreter environment. For uv-managed projects, prefer:
 
 ```console
 $ uv add --dev "testenix[pytest]"
-$ uv run testenix pytest -q tests
+$ uv run testenix pytest -q --tb=short tests
 ```
 
 An isolated `uv tool install testenix` environment does not automatically see pytest plugins from
@@ -1157,13 +1180,60 @@ console and red in JSON because both are derived from one model.
 
 ## Console
 
-The console report is always enabled:
+The console report is always enabled. Its default mode is compact: Testenix prints an aggregate row
+for each source file, then complete failure details and the final summary.
 
 ```console
 $ testenix run tests
+Testenix  |  5 tests  |  2 files  |  2 workers
+
+PASS  tests/test_accounts.py                         3 passed           [9ms]
+FAIL  tests/test_checkout.py                         1 passed, 1 failed [12ms]
+
+Problems (1)
+FAIL      tests/test_checkout.py::test_rejects_expired_card
+          attempt 1, call: expected status 402, got 200
+
+5 tests, 4 passed, 1 failed in 0.091s
 ```
 
-It prints test outcomes, failure details, and a final summary suitable for local development.
+Run IDs and timings naturally vary. The report is assembled in stable source order when execution
+finishes; it is not a live-progress display.
+
+Choose the amount of terminal detail without changing execution semantics:
+
+| Mode | Output |
+| --- | --- |
+| default | Run header, compact per-file table, collection/failure details, final summary. |
+| `-q`, `--quiet` | No header or file table; collection/failure details and final summary remain. |
+| `-v` | One stable result row per test, including duration. |
+| `-vv` | Per-test rows plus worker, attempt, and phase metadata, including captured output. |
+
+Skipped and expected-failure reasons are hidden unless they are requested explicitly:
+
+```console
+$ testenix run --show-skips tests
+```
+
+List the slowest tests with `--durations N`; use `0` to list every test. The duration section is
+printed immediately before the final summary:
+
+```console
+$ testenix run --durations 10 tests
+$ testenix run --durations 0 tests
+```
+
+ANSI styling defaults to `--color auto`, which considers the output terminal plus `NO_COLOR`,
+`FORCE_COLOR`, `CI`, and `TERM=dumb`. Force it with `--color always`, or produce plain output with
+either `--color never` or `--no-color`:
+
+```console
+$ testenix run --no-color tests
+```
+
+These flags affect the native `testenix run` console only. The transparent `testenix pytest`
+bridge preserves pytest's renderer and argument meanings; a concise bridge command is
+`testenix pytest -q --tb=short tests`.
 
 ## JSON
 
@@ -1272,6 +1342,10 @@ testenix run [PATH ...]
              [--json FILE]
              [--junit FILE]
              [--history FILE | --no-history]
+             [-q | -v | -vv]
+             [--color {auto,always,never} | --no-color]
+             [--show-skips]
+             [--durations N]
 ```
 
 | Argument | Default | Description |
@@ -1285,8 +1359,25 @@ testenix run [PATH ...]
 | `--junit` | none | Write a JUnit XML report. |
 | `--history` | `.testenix/history.sqlite3` | Override the duration-history database. |
 | `--no-history` | off | Disable reading and writing history. |
+| `-q`, `--quiet` | off | Hide the run header and compact per-file table. Collection errors, failure details, and the final summary remain visible. |
+| `-v`, `--verbose` | off | Print one result row per test in the stable detailed format. Repeat for `-vv`. |
+| `-vv` | off | Add worker, attempt, and phase metadata, including captured output. |
+| `--color auto\|always\|never` | `auto` | Select automatic ANSI styling, force styling, or disable it. |
+| `--no-color` | off | Alias for `--color never`, useful in logs and snapshots. |
+| `--show-skips` | off | Include reasons for skipped and expected-failure tests. |
+| `--durations N` | none | List the `N` slowest tests before the summary; `0` lists every test. |
 
 CLI options override `[tool.testenix]` values for the current run.
+
+With no presentation flags, Testenix prints a compact row for each source file, complete
+collection/failure diagnostics, and a final summary. Console output is assembled in stable source
+order after execution completes; these modes do not promise live progress updates. Presentation
+flags change only terminal rendering, not selection, scheduling, result statuses, JSON, JUnit, or
+exit codes.
+
+In `auto` color mode, Testenix requires a terminal, respects `NO_COLOR`, allows `FORCE_COLOR`, and
+disables styling for a truthy `CI` value or `TERM=dumb`. Explicit `always` or `never` takes
+precedence.
 
 ## `testenix pytest`
 
@@ -1296,10 +1387,12 @@ testenix pytest [PYTEST_ARGS ...]
 
 This compatibility command hands the current CLI process to pytest from the same interpreter and
 forwards every argument without translation. It preserves pytest configuration, collection,
-fixtures, parametrization, markers, classes, hooks, plugins, output, and normal exit status.
+fixtures, parametrization, markers, classes, hooks, plugins, output, and normal exit status. The
+compact native Testenix renderer is not involved: output is pytest's own output, just as with
+`uv run pytest tests`. For a concise bridge invocation, use `testenix pytest -q --tb=short tests`.
 
 ```console
-$ testenix pytest -q tests
+$ testenix pytest -q --tb=short tests
 $ testenix pytest tests/test_api.py::test_health -k smoke --maxfail=1
 $ testenix pytest -n auto tests
 $ testenix pytest --junitxml=reports/pytest.xml tests
@@ -1310,10 +1403,13 @@ Pytest and its plugins must be installed in the same Python environment as Teste
 consume a leading `--`: pytest receives it unchanged, including its normal end-of-options meaning.
 
 `[tool.testenix]` and native options such as `--workers`, `--retries`, `--timeout`, `--tag`,
-`--json`, `--junit`, and `--history` do not affect this command. Pass pytest or plugin options
-instead. In particular, `testenix --config PATH pytest ...` is rejected; `pytest` must immediately
-follow `testenix`. See [pytest compatibility](https://polishdataengineer.github.io/testenix/guides/pytest-compatibility/) for the full
-boundary.
+`--json`, `--junit`, `--history`, `--show-skips`, and `--durations` do not affect this command.
+Flags such as `-q`, `-v`, and `--color` are forwarded to pytest and have pytest's meaning, not the
+native reporter's meaning. Pytest's equivalent spellings include `-rs`, `--durations=N`, and
+`--color=yes|no|auto`; Testenix does not translate the native spellings. Pass pytest or plugin
+options instead. In particular,
+`testenix --config PATH pytest ...` is rejected; `pytest` must immediately follow `testenix`. See
+[pytest compatibility](https://polishdataengineer.github.io/testenix/guides/pytest-compatibility/) for the full boundary.
 
 ## `testenix migrate`
 
@@ -1362,9 +1458,11 @@ $ testenix run
 $ testenix run tests/unit tests/integration --workers 4
 $ testenix run --tag unit --tag fast
 $ testenix run --retries 1 --timeout 10
+$ testenix run -v --show-skips --durations 10
+$ testenix run --color never
 $ testenix run --json reports/run.json --junit reports/junit.xml
 $ testenix --config config/pyproject.toml run
-$ testenix pytest -q tests
+$ testenix pytest -q --tb=short tests
 $ testenix migrate pytest tests --dry-run
 $ testenix migrate auto tests --check --report-json reports/migration.json
 $ testenix migrate unittest tests --output tests_testenix
@@ -2382,6 +2480,19 @@ project intends to use Semantic Versioning once its public API reaches stability
 
 ## [Unreleased]
 
+### Added
+
+- Native console controls for quiet output, one- or two-level verbosity, skipped/expected-failure
+  reasons, slow-test duration lists, and explicit automatic/forced/disabled ANSI color handling.
+
+### Changed
+
+- `testenix run` now defaults to a compact per-file report while retaining complete collection and
+  failure diagnostics plus the final summary. Console rendering remains deterministic and is
+  emitted after execution rather than presented as live progress.
+- Documentation now distinguishes native Testenix rendering from the unchanged pytest output
+  produced by the transparent `testenix pytest` compatibility bridge.
+
 ## [0.2.0] - 2026-07-20
 
 ### Added
@@ -2593,7 +2704,7 @@ Complete audit record for a migration attempt.
 ## `testenix.MigrationStatus`
 
 ```text
-MigrationStatus(value, names=None, *, module=None, qualname=None, type=None, start=1, boundary=None)
+MigrationStatus(*values)
 ```
 
 Values: ANALYZED='analyzed', VALIDATED='validated', PUBLISHED='published', UNSUPPORTED='unsupported', VALIDATION_FAILED='validation_failed', SAFETY_ERROR='safety_error'
@@ -2642,7 +2753,7 @@ RunResult(run_id: 'str', tests: 'tuple[TestResult, ...]', collection_issues: 'tu
 ## `testenix.Scope`
 
 ```text
-Scope(value, names=None, *, module=None, qualname=None, type=None, start=1, boundary=None)
+Scope(*values)
 ```
 
 Values: TEST='test', MODULE='module', SESSION='session'
@@ -2652,7 +2763,7 @@ Lifetime of a fixture instance.
 ## `testenix.Status`
 
 ```text
-Status(value, names=None, *, module=None, qualname=None, type=None, start=1, boundary=None)
+Status(*values)
 ```
 
 Values: PASS='pass', FAIL='fail', ERROR_SETUP='error_setup', ERROR_TEARDOWN='error_teardown', SKIP='skip', XFAIL='xfail', XPASS='xpass', TIMEOUT='timeout', CRASH='crash', INFRA_ERROR='infra_error', CANCELLED='cancelled', NOT_RUN='not_run', FLAKY='flaky', CACHED_PASS='cached_pass'

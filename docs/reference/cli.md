@@ -27,6 +27,10 @@ testenix run [PATH ...]
              [--json FILE]
              [--junit FILE]
              [--history FILE | --no-history]
+             [-q | -v | -vv]
+             [--color {auto,always,never} | --no-color]
+             [--show-skips]
+             [--durations N]
 ```
 
 | Argument | Default | Description |
@@ -40,8 +44,25 @@ testenix run [PATH ...]
 | `--junit` | none | Write a JUnit XML report. |
 | `--history` | `.testenix/history.sqlite3` | Override the duration-history database. |
 | `--no-history` | off | Disable reading and writing history. |
+| `-q`, `--quiet` | off | Hide the run header and compact per-file table. Collection errors, failure details, and the final summary remain visible. |
+| `-v`, `--verbose` | off | Print one result row per test in the stable detailed format. Repeat for `-vv`. |
+| `-vv` | off | Add worker, attempt, and phase metadata, including captured output. |
+| `--color auto\|always\|never` | `auto` | Select automatic ANSI styling, force styling, or disable it. |
+| `--no-color` | off | Alias for `--color never`, useful in logs and snapshots. |
+| `--show-skips` | off | Include reasons for skipped and expected-failure tests. |
+| `--durations N` | none | List the `N` slowest tests before the summary; `0` lists every test. |
 
 CLI options override `[tool.testenix]` values for the current run.
+
+With no presentation flags, Testenix prints a compact row for each source file, complete
+collection/failure diagnostics, and a final summary. Console output is assembled in stable source
+order after execution completes; these modes do not promise live progress updates. Presentation
+flags change only terminal rendering, not selection, scheduling, result statuses, JSON, JUnit, or
+exit codes.
+
+In `auto` color mode, Testenix requires a terminal, respects `NO_COLOR`, allows `FORCE_COLOR`, and
+disables styling for a truthy `CI` value or `TERM=dumb`. Explicit `always` or `never` takes
+precedence.
 
 ## `testenix pytest`
 
@@ -51,10 +72,12 @@ testenix pytest [PYTEST_ARGS ...]
 
 This compatibility command hands the current CLI process to pytest from the same interpreter and
 forwards every argument without translation. It preserves pytest configuration, collection,
-fixtures, parametrization, markers, classes, hooks, plugins, output, and normal exit status.
+fixtures, parametrization, markers, classes, hooks, plugins, output, and normal exit status. The
+compact native Testenix renderer is not involved: output is pytest's own output, just as with
+`uv run pytest tests`. For a concise bridge invocation, use `testenix pytest -q --tb=short tests`.
 
 ```console
-$ testenix pytest -q tests
+$ testenix pytest -q --tb=short tests
 $ testenix pytest tests/test_api.py::test_health -k smoke --maxfail=1
 $ testenix pytest -n auto tests
 $ testenix pytest --junitxml=reports/pytest.xml tests
@@ -65,10 +88,13 @@ Pytest and its plugins must be installed in the same Python environment as Teste
 consume a leading `--`: pytest receives it unchanged, including its normal end-of-options meaning.
 
 `[tool.testenix]` and native options such as `--workers`, `--retries`, `--timeout`, `--tag`,
-`--json`, `--junit`, and `--history` do not affect this command. Pass pytest or plugin options
-instead. In particular, `testenix --config PATH pytest ...` is rejected; `pytest` must immediately
-follow `testenix`. See [pytest compatibility](../guides/pytest-compatibility.md) for the full
-boundary.
+`--json`, `--junit`, `--history`, `--show-skips`, and `--durations` do not affect this command.
+Flags such as `-q`, `-v`, and `--color` are forwarded to pytest and have pytest's meaning, not the
+native reporter's meaning. Pytest's equivalent spellings include `-rs`, `--durations=N`, and
+`--color=yes|no|auto`; Testenix does not translate the native spellings. Pass pytest or plugin
+options instead. In particular,
+`testenix --config PATH pytest ...` is rejected; `pytest` must immediately follow `testenix`. See
+[pytest compatibility](../guides/pytest-compatibility.md) for the full boundary.
 
 ## `testenix migrate`
 
@@ -117,9 +143,11 @@ $ testenix run
 $ testenix run tests/unit tests/integration --workers 4
 $ testenix run --tag unit --tag fast
 $ testenix run --retries 1 --timeout 10
+$ testenix run -v --show-skips --durations 10
+$ testenix run --color never
 $ testenix run --json reports/run.json --junit reports/junit.xml
 $ testenix --config config/pyproject.toml run
-$ testenix pytest -q tests
+$ testenix pytest -q --tb=short tests
 $ testenix migrate pytest tests --dry-run
 $ testenix migrate auto tests --check --report-json reports/migration.json
 $ testenix migrate unittest tests --output tests_testenix
