@@ -121,11 +121,13 @@ Path to a trusted collection manifest generated explicitly with:
 $ testenix manifest tests --output .testenix/collection.json
 ```
 
-On each run Testenix verifies the requested collection roots, complete selected Python-file
-inventory, and SHA-256 source digests. An exact match bypasses the collection-side imports; a stale
+On each run Testenix verifies the requested collection roots, selected test files, statically
+discoverable project-local Python import dependencies, and SHA-256 source digests. An exact match
+bypasses the collection-side imports; a stale
 but well-formed manifest falls back to normal supervised collection. Malformed JSON is rejected.
-Execution workers still import the modules they run. Regenerate the manifest when source files or
-dynamic collection inputs change.
+Execution workers still import the modules they run. Test parameter names remain available for
+diagnostics, but their values are stored only as `<redacted>` to avoid persisting secrets obtained
+during collection. Regenerate the manifest when source files or dynamic collection inputs change.
 
 The programmatic field is `manifest_path` and accepts a `pathlib.Path` or `None`.
 

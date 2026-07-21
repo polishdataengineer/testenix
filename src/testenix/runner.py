@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import statistics
 import time
@@ -88,6 +89,7 @@ class _NativeTestLocator:
     function_name: str
     case_id: str | None
     timeout: float | None
+    expected_sources: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +113,8 @@ class _CollectionManifest:
     tests: tuple[TestSpec, ...]
     issues: tuple[CollectionIssue, ...]
     sharding: tuple[ModuleShardingDecision, ...] = ()
+    expected_source_digests: tuple[tuple[str, str], ...] = ()
+    expected_dependency_digests: tuple[tuple[str, str], ...] = ()
 
 
 class _RunEventSink:
@@ -167,13 +171,25 @@ def _collection_issue_for_tags(paths: Sequence[str], tags: Sequence[str]) -> Col
     )
 
 
-def _locator(spec: TestSpec) -> _NativeTestLocator:
+def _locator(
+    spec: TestSpec,
+    expected_source_digests: Mapping[str, str] | None = None,
+    expected_dependency_digests: Sequence[tuple[str, str]] = (),
+) -> _NativeTestLocator:
     return _NativeTestLocator(
         id=spec.id,
         path=spec.path,
         function_name=spec.function_name,
         case_id=spec.case_id,
         timeout=spec.timeout,
+        expected_sources=(
+            ()
+            if expected_source_digests is None
+            else (
+                (spec.path, expected_source_digests[spec.path]),
+                *expected_dependency_digests,
+            )
+        ),
     )
 
 
@@ -305,11 +321,52 @@ def _verified_trusted_collection(
         return None
     if not verify_trusted_collection_manifest(validated, paths):
         return None
+    test_paths = {spec.path for spec in validated.tests}
     return _CollectionManifest(
         tests=validated.tests,
         issues=validated.issues,
         sharding=validated.sharding,
+        expected_source_digests=tuple(
+            (fingerprint.path, fingerprint.sha256) for fingerprint in validated.files
+        ),
+        expected_dependency_digests=tuple(
+            (fingerprint.path, fingerprint.sha256)
+            for fingerprint in validated.files
+            if fingerprint.path not in test_paths
+        ),
     )
+
+
+def _source_sha256(path: str) -> str:
+    digest = hashlib.sha256()
+    try:
+        with Path(path).open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as error:
+        raise NativeExecutionError(
+            f"cannot verify trusted manifest source {path!r}: {error}"
+        ) from error
+    return digest.hexdigest()
+
+
+def _verify_locator_sources(
+    locators: Sequence[_NativeTestLocator],
+) -> None:
+    expected: dict[str, str] = {}
+    for locator in locators:
+        for path, digest in locator.expected_sources:
+            previous = expected.setdefault(path, digest)
+            if previous != digest:
+                raise NativeExecutionError(
+                    f"trusted manifest contains conflicting source digests for {path!r}"
+                )
+    for path, digest in sorted(expected.items()):
+        if _source_sha256(path) != digest:
+            raise NativeExecutionError(
+                f"trusted manifest source digest mismatch for {path!r}; "
+                "refusing to import changed code"
+            )
 
 
 def _resolve_locators_in_worker(
@@ -317,6 +374,10 @@ def _resolve_locators_in_worker(
 ) -> tuple[CollectedTest, ...]:
     """Rediscover tests without pickling arbitrary parameter values."""
 
+    # Validate every selected test source and local collection dependency in
+    # this execution process before importing any of them. The check is
+    # repeated for every fresh batch and retry rediscovery.
+    _verify_locator_sources(locators)
     requested_names: dict[str, set[str]] = {}
     for locator in locators:
         requested_names.setdefault(locator.path, set()).add(locator.function_name)
@@ -479,6 +540,8 @@ def _initial_work_plan(
     worker_count: int,
     durations: Mapping[str, float],
     shardable_paths: frozenset[str] = _NO_SHARDABLE_PATHS,
+    expected_source_digests: Mapping[str, str] | None = None,
+    expected_dependency_digests: Sequence[tuple[str, str]] = (),
 ) -> tuple[tuple[_PlannedWork, ...], ...]:
     units = _execution_units(specs, durations, shardable_paths=shardable_paths)
     if not units:
@@ -507,7 +570,17 @@ def _initial_work_plan(
                     item=WorkItem(
                         test_id=f"shard-{shard.shard_id}",
                         target=_execute_native_batch,
-                        args=(tuple(_locator(spec) for spec in shared_specs), 1),
+                        args=(
+                            tuple(
+                                _locator(
+                                    spec,
+                                    expected_source_digests,
+                                    expected_dependency_digests,
+                                )
+                                for spec in shared_specs
+                            ),
+                            1,
+                        ),
                         stream_callback_arg="_testenix_result_sink",
                     ),
                 )
@@ -522,7 +595,16 @@ def _initial_work_plan(
                     item=WorkItem(
                         test_id=spec.id,
                         target=_execute_native_batch,
-                        args=((_locator(spec),), 1),
+                        args=(
+                            (
+                                _locator(
+                                    spec,
+                                    expected_source_digests,
+                                    expected_dependency_digests,
+                                ),
+                            ),
+                            1,
+                        ),
                         timeout=_single_deadline(spec),
                         stream_callback_arg="_testenix_result_sink",
                         ready_callback_arg="_testenix_ready_sink",
@@ -710,12 +792,16 @@ def _execute_initial_attempts(
     durations: Mapping[str, float],
     supervisor: ProcessSupervisor,
     shardable_paths: frozenset[str] = _NO_SHARDABLE_PATHS,
+    expected_source_digests: Mapping[str, str] | None = None,
+    expected_dependency_digests: Sequence[tuple[str, str]] = (),
 ) -> tuple[tuple[TestResult, ...], int]:
     plan = _initial_work_plan(
         specs,
         worker_count=worker_count,
         durations=durations,
         shardable_paths=shardable_paths,
+        expected_source_digests=expected_source_digests,
+        expected_dependency_digests=expected_dependency_digests,
     )
     executions = supervisor.execute_shards(
         tuple(tuple(work.item for work in shard) for shard in plan)
@@ -733,6 +819,8 @@ def _execute_retry_attempts(
     worker_count: int,
     durations: Mapping[str, float],
     supervisor: ProcessSupervisor,
+    expected_source_digests: Mapping[str, str] | None = None,
+    expected_dependency_digests: Sequence[tuple[str, str]] = (),
 ) -> tuple[tuple[TestResult, ...], int]:
     shards = tuple(
         shard
@@ -749,7 +837,14 @@ def _execute_retry_attempts(
             WorkItem(
                 test_id=item.spec.id,
                 target=_execute_native_one,
-                args=(_locator(item.spec), item.attempt),
+                args=(
+                    _locator(
+                        item.spec,
+                        expected_source_digests,
+                        expected_dependency_digests,
+                    ),
+                    item.attempt,
+                ),
                 attempt=item.attempt,
                 timeout=_single_deadline(item.spec),
                 ready_callback_arg=(
@@ -957,6 +1052,10 @@ def _run(
     order = {spec.id: index for index, spec in enumerate(selected)}
     user_retries_left = {spec.id: effective_config.retries for spec in selected}
     infrastructure_recovery_used = {spec.id: False for spec in selected}
+    expected_source_digests = (
+        dict(collection.expected_source_digests) if collection.expected_source_digests else None
+    )
+    expected_dependency_digests = collection.expected_dependency_digests
     worker_limit = 0
     workers_used = 0
     shardable_paths = _NO_SHARDABLE_PATHS
@@ -988,6 +1087,8 @@ def _run(
             durations=durations,
             supervisor=active_supervisor,
             shardable_paths=shardable_paths,
+            expected_source_digests=expected_source_digests,
+            expected_dependency_digests=expected_dependency_digests,
         )
         workers_used = max(workers_used, initial_workers_used)
         first_results = tuple(sorted(first_results, key=lambda result: order[result.test.id]))
@@ -1017,6 +1118,8 @@ def _run(
                 worker_count=worker_limit,
                 durations=durations,
                 supervisor=active_supervisor,
+                expected_source_digests=expected_source_digests,
+                expected_dependency_digests=expected_dependency_digests,
             )
             workers_used = max(workers_used, retry_workers_used)
             retry_results = tuple(sorted(retry_results, key=lambda result: order[result.test.id]))

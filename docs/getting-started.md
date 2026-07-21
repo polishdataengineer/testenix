@@ -166,7 +166,8 @@ $ testenix run tests --manifest .testenix/collection.json
 ```
 
 Testenix verifies the complete file inventory and every SHA-256 before reuse. A stale manifest
-falls back to supervised collection rather than running a stale test selection.
+falls back to supervised collection rather than running a stale test selection. Parameter names
+remain visible in the artifact, but their values are redacted.
 
 ## Use it from Python
 

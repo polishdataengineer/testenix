@@ -17,6 +17,7 @@ from testenix.runner import collect_trusted_manifest, run
 from testenix.sharding import (
     CollectionManifestError,
     ShardingPolicy,
+    TrustedCollectionManifest,
     assess_collection_sharding,
     build_trusted_collection_manifest,
     deserialize_trusted_collection_manifest,
@@ -69,8 +70,43 @@ def test_trusted_manifest_round_trips_as_deterministic_portable_json(
     assert serialize_trusted_collection_manifest(restored) == encoded
     assert restored.collection_roots == ("tests",)
     assert restored.files[0].path == "tests/test_sample.py"
+    assert restored.tests[0].parameters == {"value": "<redacted>"}
     assert len(restored.files[0].sha256) == 64
     assert verify_trusted_collection_manifest(restored, "tests")
+
+
+def test_manifest_redacts_dynamic_parameter_secrets_and_still_executes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    secret = "testenix-secret-must-not-reach-manifest"
+    monkeypatch.setenv("TESTENIX_CASE_SECRET", secret)
+    _suite(
+        tmp_path / "tests",
+        """
+        import os
+
+        from testenix import case
+
+        @case(token=os.environ["TESTENIX_CASE_SECRET"])
+        def test_secret(token):
+            assert token == os.environ["TESTENIX_CASE_SECRET"]
+        """,
+    )
+    collection = discover("tests")
+    assert collection.items[0].spec.parameters == {"token": secret}
+
+    encoded = serialize_trusted_collection_manifest(
+        build_trusted_collection_manifest("tests", collection)
+    )
+    manifest = deserialize_trusted_collection_manifest(encoded)
+    result = run("tests", _config(1), trusted_manifest=manifest)
+
+    assert secret not in encoded
+    assert manifest.tests[0].parameters == {"token": "<redacted>"}
+    assert result.tests[0].test.parameters == {"token": "<redacted>"}
+    assert result.tests[0].status is Status.PASS
 
 
 @pytest.mark.parametrize(
@@ -136,6 +172,222 @@ def test_manifest_verification_fails_closed_for_changed_added_and_removed_files(
     added.unlink()
     original.unlink()
     assert not verify_trusted_collection_manifest(manifest, "tests")
+
+
+def test_execution_worker_rechecks_manifest_digest_before_import(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    source = _suite(tmp_path / "tests", "def test_one():\n    assert True\n")
+    manifest = build_trusted_collection_manifest("tests", discover("tests"))
+    imported_changed_source = tmp_path / "changed-source-imported"
+    verify = runner_module.verify_trusted_collection_manifest
+
+    def verify_then_replace(
+        candidate: TrustedCollectionManifest,
+        paths: tuple[str, ...],
+    ) -> bool:
+        verified = verify(candidate, paths)
+        assert verified
+        source.write_text(
+            textwrap.dedent(
+                f"""
+                from pathlib import Path
+
+                Path({str(imported_changed_source)!r}).write_text("unsafe", encoding="utf-8")
+
+                def test_one():
+                    assert True
+                """
+            ),
+            encoding="utf-8",
+        )
+        return True
+
+    monkeypatch.setattr(runner_module, "verify_trusted_collection_manifest", verify_then_replace)
+
+    result = run("tests", _config(1), trusted_manifest=manifest)
+
+    assert not imported_changed_source.exists()
+    assert result.tests[0].status is Status.INFRA_ERROR
+    assert all(attempt.status is Status.INFRA_ERROR for attempt in result.tests[0].attempts)
+    assert any(
+        "source digest mismatch" in (phase.message or "")
+        for attempt in result.tests[0].attempts
+        for phase in attempt.phases
+    )
+
+
+def test_manifest_fingerprints_imported_case_generator(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    tests = tmp_path / "tests"
+    helper = _suite(
+        tests,
+        """
+        from testenix import case
+
+        def generated_cases():
+            return (case(id="one", value=1),)
+        """,
+        name="case_helper.py",
+    )
+    _suite(
+        tests,
+        """
+        from case_helper import generated_cases
+        from testenix import cases
+
+        @cases(*generated_cases())
+        def test_value(value):
+            assert value > 0
+        """,
+    )
+    manifest = build_trusted_collection_manifest("tests", discover("tests"))
+
+    assert verify_trusted_collection_manifest(manifest, "tests")
+    assert any(fingerprint.path == "tests/case_helper.py" for fingerprint in manifest.files)
+
+    helper.write_text(
+        textwrap.dedent(
+            """
+            from testenix import case
+
+            def generated_cases():
+                return (
+                    case(id="one", value=1),
+                    case(id="two", value=2),
+                )
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    assert not verify_trusted_collection_manifest(manifest, "tests")
+
+    result = run("tests", _config(1), trusted_manifest=manifest)
+
+    assert len(result.tests) == 2
+    assert {test.status for test in result.tests} == {Status.PASS}
+
+
+def test_manifest_fingerprints_collection_import_nested_inside_helper(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    tests = tmp_path / "tests"
+    nested = _suite(
+        tests,
+        """
+        from testenix import case
+
+        def build_cases():
+            return (case(id="one", value=1),)
+        """,
+        name="nested_case_helper.py",
+    )
+    _suite(
+        tests,
+        """
+        def generated_cases():
+            from nested_case_helper import build_cases
+
+            return build_cases()
+        """,
+        name="case_helper.py",
+    )
+    _suite(
+        tests,
+        """
+        from case_helper import generated_cases
+        from testenix import cases
+
+        @cases(*generated_cases())
+        def test_value(value):
+            assert value > 0
+        """,
+    )
+
+    manifest = build_trusted_collection_manifest("tests", discover("tests"))
+
+    assert any(fingerprint.path == "tests/nested_case_helper.py" for fingerprint in manifest.files)
+    nested.write_text(
+        "from testenix import case\n\ndef build_cases(): return (case(id='two', value=2),)\n",
+        encoding="utf-8",
+    )
+    assert not verify_trusted_collection_manifest(manifest, "tests")
+
+
+def test_execution_worker_rechecks_imported_case_generator_digest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    tests = tmp_path / "tests"
+    helper = _suite(
+        tests,
+        """
+        from testenix import case
+
+        def generated_cases():
+            return (case(id="one", value=1),)
+        """,
+        name="case_helper.py",
+    )
+    _suite(
+        tests,
+        """
+        from case_helper import generated_cases
+        from testenix import cases
+
+        @cases(*generated_cases())
+        def test_value(value):
+            assert value == 1
+        """,
+    )
+    manifest = build_trusted_collection_manifest("tests", discover("tests"))
+    imported_changed_helper = tmp_path / "changed-helper-imported"
+    verify = runner_module.verify_trusted_collection_manifest
+
+    def verify_then_replace(
+        candidate: TrustedCollectionManifest,
+        paths: tuple[str, ...],
+    ) -> bool:
+        verified = verify(candidate, paths)
+        assert verified
+        helper.write_text(
+            textwrap.dedent(
+                f"""
+                from pathlib import Path
+
+                from testenix import case
+
+                Path({str(imported_changed_helper)!r}).write_text("unsafe", encoding="utf-8")
+
+                def generated_cases():
+                    return (case(id="one", value=1),)
+                """
+            ),
+            encoding="utf-8",
+        )
+        return True
+
+    monkeypatch.setattr(runner_module, "verify_trusted_collection_manifest", verify_then_replace)
+
+    result = run("tests", _config(1), trusted_manifest=manifest)
+
+    assert not imported_changed_helper.exists()
+    assert result.tests[0].status is Status.INFRA_ERROR
+    assert any(
+        "case_helper.py" in (phase.message or "")
+        and "source digest mismatch" in (phase.message or "")
+        for attempt in result.tests[0].attempts
+        for phase in attempt.phases
+    )
 
 
 def test_configured_trusted_manifest_skips_the_full_collection_import(
@@ -321,7 +573,7 @@ def test_function_autouse_fixture_does_not_block_opt_in_sharding(tmp_path: Path)
         """
         from testenix import fixture
 
-        @fixture(autouse=True)
+        @fixture(scope="test", autouse=True)
         def isolated_setup(tmp_path):
             assert tmp_path.is_dir()
 
@@ -342,6 +594,121 @@ def test_function_autouse_fixture_does_not_block_opt_in_sharding(tmp_path: Path)
         sharding_policy=ShardingPolicy(intra_module=True),
     )
     assert len({test.attempts[0].worker_id for test in result.tests}) == 2
+
+
+def test_imported_local_fixture_scope_fails_closed_across_manifest_reuse(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    tests = tmp_path / "tests"
+    scope_source = _suite(tests, 'SCOPE = "test"\n', name="fixture_config.py")
+    _suite(
+        tests,
+        """
+        from fixture_config import SCOPE
+        from testenix import fixture
+
+        @fixture(scope=SCOPE)
+        def shared():
+            return 42
+
+        def test_one(shared):
+            assert shared == 42
+
+        def test_two(shared):
+            assert shared == 42
+        """,
+    )
+    manifest = build_trusted_collection_manifest("tests", discover("tests"))
+
+    assert len(manifest.sharding) == 1
+    assert not manifest.sharding[0].eligible
+    assert any(
+        "statically guaranteed test scope" in blocker for blocker in manifest.sharding[0].blockers
+    )
+    assert any(fingerprint.path == "tests/fixture_config.py" for fingerprint in manifest.files)
+
+    scope_source.write_text('SCOPE = "session"\n', encoding="utf-8")
+    assert not verify_trusted_collection_manifest(manifest, "tests")
+
+    result = run(
+        "tests",
+        TestenixConfig(workers=2, history_path=None, shard_modules=True),
+        trusted_manifest=manifest,
+    )
+
+    assert {test.status for test in result.tests} == {Status.PASS}
+    assert result.workers_used == 1
+    assert result.shardable_paths == ()
+
+
+def test_imported_fixture_provider_fails_closed_across_manifest_reuse(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    tests = tmp_path / "tests"
+    provider = _suite(
+        tests,
+        """
+        from testenix import fixture
+
+        @fixture
+        def shared():
+            return 42
+        """,
+        name="external_fixture_provider.py",
+    )
+    _suite(
+        tests,
+        """
+        from external_fixture_provider import shared
+
+        def test_one(shared):
+            assert shared == 42
+
+        def test_two(shared):
+            assert shared == 42
+        """,
+    )
+    manifest = build_trusted_collection_manifest("tests", discover("tests"))
+
+    assert len(manifest.sharding) == 1
+    assert not manifest.sharding[0].eligible
+    assert any(
+        "outside the collected module source" in blocker
+        for blocker in manifest.sharding[0].blockers
+    )
+    assert any(
+        fingerprint.path == "tests/external_fixture_provider.py" for fingerprint in manifest.files
+    )
+
+    provider.write_text(
+        textwrap.dedent(
+            """
+            from testenix import fixture
+
+            @fixture(scope="session")
+            def shared():
+                return 42
+            """
+        ),
+        encoding="utf-8",
+    )
+    # Local imports that can influence collection are fingerprinted alongside
+    # selected test files, so the stale manifest is rejected before scheduling.
+    assert not verify_trusted_collection_manifest(manifest, "tests")
+
+    result = run(
+        "tests",
+        TestenixConfig(workers=2, history_path=None, shard_modules=True),
+        trusted_manifest=manifest,
+    )
+
+    assert {test.status for test in result.tests} == {Status.PASS}
+    assert result.workers_used == 1
+    assert result.shardable_paths == ()
 
 
 @pytest.mark.parametrize("scope", ["module", "session"])
@@ -390,6 +757,66 @@ def test_obvious_mutable_global_and_import_lifecycle_are_conservative_blockers(
     assert not decision.eligible
     assert any("module-level collection" in blocker for blocker in decision.blockers)
     assert any("import-time call" in blocker for blocker in decision.blockers)
+
+
+@pytest.mark.parametrize(
+    ("source", "expected_blocker"),
+    [
+        (
+            """
+            STATE = ([],)
+
+            def test_one():
+                STATE[0].append("changed")
+            """,
+            "module-level collection 'STATE'",
+        ),
+        (
+            """
+            class State:
+                values = []
+
+            def test_one():
+                State.values.append("changed")
+            """,
+            "mutable class state on 'State'",
+        ),
+        (
+            """
+            class State:
+                pass
+
+            State.values = []
+
+            def test_one():
+                State.values.append("changed")
+            """,
+            "mutable class state on 'State'",
+        ),
+        (
+            """
+            class Outer:
+                class Inner:
+                    values = []
+
+            def test_one():
+                Outer.Inner.values.append("changed")
+            """,
+            "mutable class state on 'Outer'",
+        ),
+    ],
+)
+def test_nested_and_class_mutable_state_block_module_sharding(
+    tmp_path: Path,
+    source: str,
+    expected_blocker: str,
+) -> None:
+    path = _suite(tmp_path, source)
+
+    decision = assess_collection_sharding(discover(str(path)))[0]
+
+    assert not decision.eligible
+    assert any(expected_blocker in blocker for blocker in decision.blockers)
 
 
 @pytest.mark.parametrize(
@@ -532,6 +959,23 @@ def test_obvious_mutable_global_and_import_lifecycle_are_conservative_blockers(
                 assert STATE == 1
             """,
             "assignment call factory",
+        ),
+        (
+            """
+            import sys
+
+            ORIGINAL = sys.path[0]
+
+            def register_path():
+                return ORIGINAL
+
+            sys.path.insert(0, register_path())
+            assert sys.path.pop(0) == ORIGINAL
+
+            def test_one():
+                assert True
+            """,
+            "expression call register_path",
         ),
     ],
 )

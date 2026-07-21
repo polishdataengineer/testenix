@@ -45,7 +45,8 @@ invalid and excluded from performance comparisons.
    design covers 100, 500, 1,000, and 3,000 tests; 1, 2, 4, and `auto` workers;
    balanced/dominant/single-module layouts; and default history versus `--no-history`. The reference
    configuration changes one axis at a time. `--full-cross-product` is available when every
-   combination is worth the substantially larger runtime. `auto` remains an adaptive Testenix
+   combination is worth the substantially larger runtime; its artifact still projects one
+   canonical balanced/no-history reference curve. `auto` remains an adaptive Testenix
    request; the harness records the worker count observed in each Testenix sample. For the xdist
    side of that row, `auto` resolves separately to Python's logical CPU count and is labelled as
    such.
@@ -56,7 +57,18 @@ invalid and excluded from performance comparisons.
    inventories and hashes under directory source roots, the complete generated Python inventory,
    and that canonical `python -m pytest` / `python -m testenix run` commands point at the report's
    source and output roots. It records only aggregate timings/output sizes, digests, redacted Git
-   state, and optional content fingerprints.
+   state, and optional content fingerprints. Repeated or conflicting worker/history/sharding flags
+   fail closed, and an imported runtime must belong to the exact files owned by its installed
+   distribution rather than merely sharing the same `site-packages` directory.
+
+Every synthetic and real-project command has a bounded deadline and bounded cleanup. Windows starts
+the command suspended, attaches a kill-on-close Job Object, then resumes it. POSIX always signals
+the new root session and identity-checks every observed detached descendant. Polling cannot provide
+an absolute kernel guarantee for a child that calls `setsid()` and exits before the first snapshot;
+run hostile benchmark inputs inside a container or other kernel containment boundary.
+On POSIX the harness also discovers workers that created their own sessions; on Windows it uses a
+kill-on-close Job Object with a bounded recursive fallback. A timed-out runner therefore cannot
+continue consuming CPU or contaminate later counterbalanced samples.
 
 The 118-test project mentioned in the v0.2.0 release was a differential semantic-validation gate.
 Its three timings were single observations, not a committed multi-round benchmark, and therefore do

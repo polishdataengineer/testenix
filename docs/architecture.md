@@ -150,9 +150,12 @@ A caller may instead supply a `TrustedCollectionManifest` created by an earlier 
 collection. Before using it, Testenix enumerates the current roots and verifies the complete file
 set and every SHA-256 digest. An exact match bypasses collection imports; a stale manifest falls
 back to the supervised collector. Malformed serialized input is rejected at the adapter boundary.
-The manifest also carries prior sharding decisions so collection and scheduling agree. This removes
+Manifest parameter values are redacted at creation and serialization; only their names remain.
+The manifest also carries prior sharding decisions so collection and scheduling agree. A module
+using a fixture provider from outside its fingerprinted source fails closed to module affinity.
+This removes
 one module import per unchanged run, not the execution-worker import needed to reconstruct Python
-objects. Inputs to dynamic collection beyond selected source bytes remain the producer's trust
+objects. Inputs to dynamic collection beyond fingerprinted source bytes remain the producer's trust
 responsibility.
 
 Workers normally create a separate POSIX process session (or use recursive tree termination on

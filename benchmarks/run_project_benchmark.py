@@ -23,6 +23,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
+if __package__:
+    from benchmarks.process_control import run_bounded_process
+else:  # direct ``python benchmarks/run_project_benchmark.py`` execution
+    from process_control import run_bounded_process
+
 ROOT = Path(__file__).resolve().parents[1]
 RunnerKind = Literal["pytest", "testenix"]
 
@@ -160,16 +165,17 @@ from pathlib import Path
 
 module = importlib.import_module(sys.argv[1])
 module_file = Path(module.__file__).resolve()
-source = module_file.parent if module_file.name != "__init__.py" else module_file.parent
 distribution = importlib.metadata.distribution(sys.argv[2])
-distribution_root = Path(distribution.locate_file("")).resolve()
 digest = hashlib.sha256()
 count = 0
-for path in sorted(source.rglob("*"), key=lambda item: item.as_posix()):
-    if not path.is_file() or path.suffix not in {".py", ".so", ".pyd", ".dll", ".dylib"}:
+owned_paths = set()
+for entry in sorted(distribution.files or (), key=lambda item: str(item)):
+    path = Path(distribution.locate_file(entry)).resolve()
+    if not path.is_file():
         continue
+    owned_paths.add(path)
     data = path.read_bytes()
-    digest.update(path.relative_to(source).as_posix().encode())
+    digest.update(str(entry).replace("\\\\", "/").encode())
     digest.update(b"\\0")
     digest.update(hashlib.sha256(data).digest())
     count += 1
@@ -177,7 +183,7 @@ print(json.dumps({
     "version": distribution.version,
     "package_sha256": digest.hexdigest(),
     "package_files": count,
-    "source_matches_distribution": module_file.is_relative_to(distribution_root),
+    "source_matches_distribution": module_file in owned_paths,
 }, sort_keys=True))
 """
     completed = subprocess.run(
@@ -290,14 +296,11 @@ def _run_once(
     timeout: float,
 ) -> Sample:
     started = time.perf_counter()
-    completed = subprocess.run(
+    completed = run_bounded_process(
         runner.command,
         cwd=project,
         env=environment,
-        capture_output=True,
-        text=True,
         timeout=timeout,
-        check=False,
     )
     elapsed = time.perf_counter() - started
     _validate_output(
@@ -385,32 +388,96 @@ def _display_command(runner: Runner, project: Path) -> str:
     return shlex.join(_display_argv(runner, project))
 
 
-def _option_value(command: tuple[str, ...], *names: str) -> str | None:
-    for index, argument in enumerate(command):
+def _contract_arguments(command: tuple[str, ...]) -> tuple[str, ...]:
+    try:
+        delimiter = command.index("--")
+    except ValueError:
+        return command
+    return command[:delimiter]
+
+
+def _option_occurrences(
+    command: tuple[str, ...],
+    *names: str,
+) -> tuple[tuple[str, str | None], ...]:
+    arguments = _contract_arguments(command)
+    occurrences: list[tuple[str, str | None]] = []
+    for index, argument in enumerate(arguments):
         if argument in names:
-            return command[index + 1] if index + 1 < len(command) else None
+            value = arguments[index + 1] if index + 1 < len(arguments) else None
+            occurrences.append((argument, value))
+            continue
         for name in names:
             prefix = f"{name}="
             if argument.startswith(prefix):
-                return argument[len(prefix) :]
-    return None
+                occurrences.append((name, argument[len(prefix) :]))
+                break
+            if len(name) == 2 and name.startswith("-") and argument.startswith(name):
+                occurrences.append((name, argument[len(name) :].removeprefix("=")))
+                break
+    return tuple(occurrences)
+
+
+def _single_option_value(runner: Runner, label: str, *names: str) -> str | None:
+    occurrences = _option_occurrences(runner.command, *names)
+    if len(occurrences) > 1:
+        rendered = ", ".join(name for name, _value in occurrences)
+        raise RuntimeError(
+            f"runner {runner.name}: contract option {label} is configured more than once "
+            f"({rendered})"
+        )
+    if not occurrences:
+        return None
+    name, value = occurrences[0]
+    if value is None or not value:
+        raise RuntimeError(f"runner {runner.name}: contract option {name} requires a value")
+    return value
+
+
+def _exclusive_flags(runner: Runner, label: str, *names: str) -> str | None:
+    arguments = _contract_arguments(runner.command)
+    occurrences = tuple(argument for argument in arguments if argument in names)
+    if len(occurrences) > 1:
+        rendered = ", ".join(occurrences)
+        raise RuntimeError(
+            f"runner {runner.name}: contract option {label} is configured more than once "
+            f"({rendered})"
+        )
+    return occurrences[0] if occurrences else None
 
 
 def _runner_contract(runner: Runner) -> dict[str, Any]:
     if runner.kind == "testenix":
-        history_path = _option_value(runner.command, "--history")
+        workers = _single_option_value(runner, "workers", "--workers", "-w")
+        history_path = _single_option_value(runner, "history", "--history")
+        history_switch = _exclusive_flags(runner, "history", "--no-history")
+        if history_path is not None and history_switch is not None:
+            raise RuntimeError(
+                f"runner {runner.name}: contract option history is configured more than once "
+                "(--history, --no-history)"
+            )
+        sharding_switch = _exclusive_flags(
+            runner,
+            "module sharding",
+            "--shard-modules",
+            "--no-shard-modules",
+        )
         return {
-            "workers_requested": _option_value(runner.command, "--workers", "-w")
-            or "configuration",
+            "workers_requested": workers or "configuration",
             "history_mode": (
                 "disabled"
-                if "--no-history" in runner.command
+                if history_switch == "--no-history"
                 else (f"explicit:{history_path}" if history_path is not None else "configuration")
             ),
-            "safe_module_sharding": "--shard-modules" in runner.command,
+            "safe_module_sharding": sharding_switch == "--shard-modules",
         }
     return {
-        "workers_requested": _option_value(runner.command, "-n", "--numprocesses"),
+        "workers_requested": _single_option_value(
+            runner,
+            "workers",
+            "-n",
+            "--numprocesses",
+        ),
         "history_mode": None,
         "safe_module_sharding": None,
     }

@@ -9,8 +9,9 @@ unobservable mutable state cannot be proven safe by static analysis.  The
 analyser still fails closed for hazards Testenix can identify reliably:
 
 * module- or session-scoped fixtures;
+* fixtures imported from outside the collected module source;
 * direct writes to module globals through ``global``;
-* mutations of obvious module-level list/dict/set/deque bindings; and
+* mutations of obvious nested module containers and mutable class state; and
 * executable import-time control flow or lifecycle calls.
 
 Function-scoped fixtures, including autouse fixtures, are safe to recreate in
@@ -24,6 +25,7 @@ import hashlib
 import json
 import math
 import re
+import sys
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -32,10 +34,10 @@ from typing import Any
 
 from testenix.contracts import CollectionIssue, Scope, TestSpec
 from testenix.discovery import CollectionResult, enumerate_test_files
-from testenix.events import json_safe
 
 COLLECTION_MANIFEST_FORMAT = "testenix.collection-manifest"
 COLLECTION_MANIFEST_SCHEMA_VERSION = 1
+REDACTED_PARAMETER_VALUE = "<redacted>"
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
 
@@ -45,7 +47,7 @@ class CollectionManifestError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class SourceFingerprint:
-    """SHA-256 identity of one project-relative test source file."""
+    """SHA-256 identity of one project-relative collection source file."""
 
     path: str
     sha256: str
@@ -56,8 +58,11 @@ class TrustedCollectionManifest:
     """Explicit portable collection result that may bypass collection imports.
 
     This is deliberately not an implicit cache.  A caller creates or loads the
-    manifest and opts into trusting it for a run.  Testenix still compares the
-    complete test-file inventory and every SHA-256 digest before using it.
+    manifest and opts into trusting it for a run. Parameter names are retained
+    for diagnostics, but every parameter value is replaced with the explicit
+    ``<redacted>`` sentinel. Testenix still compares the complete test-file
+    inventory plus local import dependencies and every SHA-256 digest before
+    using it.
     Dynamic collection influenced by anything other than source bytes (for
     example environment variables) remains the manifest producer's trust
     decision.
@@ -123,12 +128,6 @@ _MUTATING_METHODS = frozenset(
         "setdefault",
         "sort",
         "update",
-    }
-)
-_SAFE_IMPORT_TIME_CALLS = frozenset(
-    {
-        "sys.path.append",
-        "sys.path.insert",
     }
 )
 _SAFE_TESTENIX_DECORATOR_FACTORIES = frozenset(
@@ -209,6 +208,49 @@ def _testenix_decorator_names(tree: ast.Module) -> frozenset[str]:
     return frozenset(name for name in imported if name.split(".", 1)[0] not in rebound)
 
 
+def _fixture_scope_blockers(
+    statement: ast.stmt,
+    *,
+    safe_decorators: frozenset[str],
+) -> tuple[str, ...]:
+    """Require a local fixture's test scope to be evident from its syntax.
+
+    Sharding also runs without a trusted manifest, and dynamic imports can sit
+    outside the manifest's project-local dependency boundary. Trusting the
+    runtime value of ``scope=IMPORTED`` would therefore make the safety proof
+    depend on mutable external state. Only the decorator default and the
+    literal string ``"test"`` are stable enough for the opt-in proof.
+    """
+
+    if not isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return ()
+    fixture_names = frozenset(
+        name for name in safe_decorators if name.rsplit(".", 1)[-1] == "fixture"
+    )
+    blockers: set[str] = set()
+    for decorator in statement.decorator_list:
+        decorated_by = decorator.func if isinstance(decorator, ast.Call) else decorator
+        if _qualified_name(decorated_by) not in fixture_names:
+            continue
+        if not isinstance(decorator, ast.Call):
+            # ``@fixture`` uses the API's immutable test-scope default.
+            continue
+        scope_keywords = tuple(keyword for keyword in decorator.keywords if keyword.arg == "scope")
+        has_dynamic_keywords = any(keyword.arg is None for keyword in decorator.keywords)
+        scope_is_literal_test = (
+            len(scope_keywords) == 1
+            and isinstance(scope_keywords[0].value, ast.Constant)
+            and scope_keywords[0].value.value == Scope.TEST.value
+        )
+        uses_default_scope = not scope_keywords and not has_dynamic_keywords and not decorator.args
+        if scope_is_literal_test and not has_dynamic_keywords and not decorator.args:
+            continue
+        if uses_default_scope:
+            continue
+        blockers.add(f"fixture {statement.name!r} does not have a statically guaranteed test scope")
+    return tuple(sorted(blockers))
+
+
 class _EagerCallVisitor(ast.NodeVisitor):
     """Find calls evaluated while an enclosing expression is constructed."""
 
@@ -281,6 +323,10 @@ def _definition_time_call_blockers(
     elif isinstance(statement, ast.Delete):
         for target in statement.targets:
             block_calls(target, "delete target")
+    elif isinstance(statement, ast.Expr):
+        # The outer expression is handled by ``_import_time_blocker``. Walk it
+        # as well so nested calls can never hide behind another lifecycle call.
+        block_calls(statement.value, "expression")
     elif isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
         inspect_decorators(statement.decorator_list)
         for default in (*statement.args.defaults, *statement.args.kw_defaults):
@@ -330,13 +376,86 @@ def _assigned_names(target: ast.AST) -> tuple[str, ...]:
     return ()
 
 
-def _is_mutable_value(node: ast.AST | None) -> bool:
-    if isinstance(node, (ast.List, ast.Dict, ast.Set, ast.ListComp, ast.DictComp, ast.SetComp)):
-        return True
-    if isinstance(node, ast.Call):
+class _MutableValueVisitor(ast.NodeVisitor):
+    """Recognise mutable values retained by a module/class binding."""
+
+    def __init__(self) -> None:
+        self.found = False
+
+    def visit_List(self, node: ast.List) -> None:  # noqa: N802 - ast visitor API
+        self.found = True
+
+    def visit_Dict(self, node: ast.Dict) -> None:  # noqa: N802 - ast visitor API
+        self.found = True
+
+    def visit_Set(self, node: ast.Set) -> None:  # noqa: N802 - ast visitor API
+        self.found = True
+
+    def visit_ListComp(self, node: ast.ListComp) -> None:  # noqa: N802 - ast visitor API
+        self.found = True
+
+    def visit_DictComp(self, node: ast.DictComp) -> None:  # noqa: N802 - ast visitor API
+        self.found = True
+
+    def visit_SetComp(self, node: ast.SetComp) -> None:  # noqa: N802 - ast visitor API
+        self.found = True
+
+    def visit_Call(self, node: ast.Call) -> None:  # noqa: N802 - ast visitor API
         qualified = _qualified_name(node.func)
-        return qualified is not None and qualified.rsplit(".", 1)[-1] in _MUTABLE_FACTORIES
+        if qualified is not None and qualified.rsplit(".", 1)[-1] in _MUTABLE_FACTORIES:
+            self.found = True
+            return
+        self.generic_visit(node)
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:  # noqa: N802 - ast visitor API
+        # A lambda body is lazy, while its defaults are retained immediately and
+        # can themselves become shared mutable state.
+        for default in (*node.args.defaults, *node.args.kw_defaults):
+            if default is not None:
+                self.visit(default)
+
+
+def _is_mutable_value(node: ast.AST | None) -> bool:
+    if node is None:
+        return False
+    visitor = _MutableValueVisitor()
+    visitor.visit(node)
+    return visitor.found
+
+
+def _class_defines_mutable_state(statement: ast.ClassDef) -> bool:
+    for child in statement.body:
+        if isinstance(child, (ast.Assign, ast.AnnAssign)) and _is_mutable_value(child.value):
+            return True
+        if isinstance(child, ast.ClassDef) and _class_defines_mutable_state(child):
+            return True
     return False
+
+
+def _mutable_class_bindings(tree: ast.Module) -> frozenset[str]:
+    """Return module class roots that retain obvious mutable class state."""
+
+    class_names = {statement.name for statement in tree.body if isinstance(statement, ast.ClassDef)}
+    names = {
+        statement.name
+        for statement in tree.body
+        if isinstance(statement, ast.ClassDef) and _class_defines_mutable_state(statement)
+    }
+    for statement in tree.body:
+        targets: Sequence[ast.expr]
+        if isinstance(statement, ast.Assign) and _is_mutable_value(statement.value):
+            targets = statement.targets
+        elif isinstance(statement, ast.AnnAssign) and _is_mutable_value(statement.value):
+            targets = (statement.target,)
+        else:
+            continue
+        for target in targets:
+            root = _root_name(target)
+            if root in class_names and not isinstance(target, ast.Name):
+                # Covers both ``State.values = []`` and a nested target such as
+                # ``Outer.Inner.values = []`` without attempting alias analysis.
+                names.add(root)
+    return frozenset(names)
 
 
 def _mutable_module_bindings(tree: ast.Module) -> frozenset[str]:
@@ -347,6 +466,7 @@ def _mutable_module_bindings(tree: ast.Module) -> frozenset[str]:
                 names.update(_assigned_names(target))
         elif isinstance(statement, ast.AnnAssign) and _is_mutable_value(statement.value):
             names.update(_assigned_names(statement.target))
+    names.update(_mutable_class_bindings(tree))
     return frozenset(names)
 
 
@@ -403,8 +523,6 @@ def _import_time_blocker(statement: ast.stmt) -> str | None:
             return None
         if isinstance(statement.value, ast.Call):
             name = _qualified_name(statement.value.func)
-            if name in _SAFE_IMPORT_TIME_CALLS:
-                return None
             return f"executes import-time call {name or '<dynamic>'}"
         return "executes an import-time expression"
     if isinstance(
@@ -450,7 +568,10 @@ def _source_blockers(path: str) -> tuple[str, ...]:
                 safe_decorators=safe_decorators,
             )
         )
+        blockers.update(_fixture_scope_blockers(statement, safe_decorators=safe_decorators))
 
+    mutable_class_bindings = _mutable_class_bindings(tree)
+    blockers.update(f"defines mutable class state on {name!r}" for name in mutable_class_bindings)
     visitor = _StateHazardVisitor(_mutable_module_bindings(tree))
     # Module-level assignments establish state; only function/class bodies can
     # make that state order-dependent across tests.
@@ -474,9 +595,28 @@ def assess_collection_sharding(
     definitions = collection.registry.definitions
     for (path, module_name), _test_ids in sorted(modules.items()):
         blockers = set(_source_blockers(path))
+        module_source = Path(path).resolve()
         for definition in definitions:
             if definition.module_name not in (None, module_name):
                 continue
+            code = getattr(definition.function, "__code__", None)
+            source_name = getattr(code, "co_filename", None)
+            try:
+                fixture_source = (
+                    Path(source_name).resolve() if isinstance(source_name, str) else None
+                )
+            except (OSError, RuntimeError):
+                fixture_source = None
+            if not definition.builtin and fixture_source != module_source:
+                # Keep the sharding proof local even though trusted manifests
+                # also fingerprint discoverable project-local imports. A
+                # provider can live outside that boundary or be resolved by
+                # dynamic import machinery that static dependency discovery
+                # cannot prove complete.
+                blockers.add(
+                    f"fixture {definition.name!r} is imported from outside "
+                    "the collected module source"
+                )
             if definition.scope in {Scope.MODULE, Scope.SESSION}:
                 blockers.add(f"fixture {definition.name!r} has {definition.scope.value} scope")
         rendered = tuple(sorted(blockers))
@@ -535,6 +675,105 @@ def _hash_source(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _module_file_candidates(base: Path, module_name: str) -> tuple[Path, ...]:
+    parts = tuple(part for part in module_name.split(".") if part)
+    if not parts:
+        return ()
+    target = base.joinpath(*parts)
+    candidates = [target.with_suffix(".py"), target / "__init__.py"]
+    for index in range(1, len(parts)):
+        candidates.append(base.joinpath(*parts[:index], "__init__.py"))
+    return tuple(candidates)
+
+
+def _local_import_candidates(source: Path, tree: ast.Module, root: Path) -> tuple[Path, ...]:
+    search_roots = {source.parent, root}
+    for raw_path in sys.path:
+        try:
+            candidate = Path(raw_path or ".").resolve()
+            candidate.relative_to(root)
+        except (OSError, RuntimeError, ValueError):
+            continue
+        search_roots.add(candidate)
+
+    candidates: set[Path] = set()
+    # Imports inside a helper called by a decorator/case factory can execute
+    # during collection just as top-level imports do. Walking the complete AST
+    # is deliberately conservative: runtime-only local imports may cause extra
+    # invalidation, but can never escape the manifest's dependency boundary.
+    for statement in ast.walk(tree):
+        if isinstance(statement, ast.Import):
+            for alias in statement.names:
+                if alias.name == "testenix" or alias.name.startswith("testenix."):
+                    continue
+                for search_root in search_roots:
+                    candidates.update(_module_file_candidates(search_root, alias.name))
+            continue
+        if not isinstance(statement, ast.ImportFrom) or statement.module == "__future__":
+            continue
+        module_name = statement.module or ""
+        if statement.level == 0:
+            if module_name == "testenix" or module_name.startswith("testenix."):
+                continue
+            bases = tuple(search_roots)
+        else:
+            relative_base = source.parent
+            for _ in range(statement.level - 1):
+                relative_base = relative_base.parent
+            bases = (relative_base,)
+        for base in bases:
+            candidates.update(_module_file_candidates(base, module_name))
+            for alias in statement.names:
+                if alias.name != "*":
+                    imported_name = ".".join(part for part in (module_name, alias.name) if part)
+                    candidates.update(_module_file_candidates(base, imported_name))
+    return tuple(candidates)
+
+
+def _local_import_dependencies(files: Sequence[Path], root: Path) -> tuple[Path, ...]:
+    """Find local Python imports whose bytes can influence collection metadata."""
+
+    initial = {path.resolve() for path in files}
+    dependencies: set[Path] = set()
+    pending = list(initial)
+    inspected: set[Path] = set()
+    while pending:
+        source = pending.pop()
+        if source in inspected:
+            continue
+        inspected.add(source)
+        try:
+            tree = ast.parse(source.read_bytes(), filename=str(source))
+        except (OSError, SyntaxError, UnicodeError):
+            continue
+        for candidate in _local_import_candidates(source, tree, root):
+            try:
+                resolved = candidate.resolve()
+                relative = resolved.relative_to(root)
+            except (OSError, RuntimeError, ValueError):
+                continue
+            if (
+                not resolved.is_file()
+                or resolved.suffix != ".py"
+                or any(
+                    part in {".venv", "venv", "site-packages", "__pycache__"}
+                    for part in relative.parts
+                )
+            ):
+                continue
+            if resolved not in initial and resolved not in dependencies:
+                dependencies.add(resolved)
+                pending.append(resolved)
+    return tuple(sorted(dependencies, key=lambda path: path.as_posix()))
+
+
+def _redacted_parameters(parameters: Mapping[str, Any]) -> dict[str, str]:
+    names = tuple(parameters)
+    if any(not isinstance(name, str) or not name for name in names):
+        raise CollectionManifestError("test parameter names must be non-empty strings")
+    return {name: REDACTED_PARAMETER_VALUE for name in sorted(names)}
+
+
 def _collection_inputs(
     paths: str | Path | Iterable[str | Path],
     root: Path,
@@ -556,16 +795,14 @@ def _collection_inputs(
 
 
 def _portable_spec(spec: TestSpec, root: Path) -> TestSpec:
-    parameters = json_safe(spec.parameters)
-    if not isinstance(parameters, Mapping):
-        parameters = {}
+    parameters = _redacted_parameters(spec.parameters)
     return TestSpec(
         id=spec.id,
         path=_relative_to_root(spec.path, root),
         module_name=spec.module_name,
         function_name=spec.function_name,
         display_name=spec.display_name,
-        parameters=dict(parameters),
+        parameters=parameters,
         case_id=spec.case_id,
         tags=frozenset(spec.tags),
         skip_reason=spec.skip_reason,
@@ -593,12 +830,14 @@ def build_trusted_collection_manifest(
     if enumeration_issues:
         details = "; ".join(issue.message for issue in enumeration_issues)
         raise CollectionManifestError(f"cannot fingerprint collection roots: {details}")
+    dependency_files = _local_import_dependencies(files, root)
+    fingerprint_files = tuple(sorted({*files, *dependency_files}, key=lambda path: path.as_posix()))
     fingerprints = tuple(
         SourceFingerprint(
             path=_relative_to_root(path, root),
             sha256=_hash_source(path),
         )
-        for path in files
+        for path in fingerprint_files
     )
     portable_tests = tuple(_portable_spec(item.spec, root) for item in collection.items)
     decisions = tuple(
@@ -642,7 +881,7 @@ def trusted_collection_manifest_to_dict(
                 "module_name": spec.module_name,
                 "function_name": spec.function_name,
                 "display_name": spec.display_name,
-                "parameters": json_safe(spec.parameters),
+                "parameters": _redacted_parameters(spec.parameters),
                 "case_id": spec.case_id,
                 "tags": sorted(spec.tags),
                 "skip_reason": spec.skip_reason,
@@ -843,14 +1082,11 @@ def trusted_collection_manifest_from_dict(data: Mapping[str, Any]) -> TrustedCol
             not isinstance(key, str) for key in parameters
         ):
             raise CollectionManifestError(f"tests[{index}].parameters must be an object")
-        try:
-            inert_parameters = json_safe(parameters)
-        except ValueError as error:
+        if any(value != REDACTED_PARAMETER_VALUE for value in parameters.values()):
             raise CollectionManifestError(
-                f"tests[{index}].parameters cannot be represented safely"
-            ) from error
-        if not isinstance(inert_parameters, Mapping):  # pragma: no cover - defensive invariant
-            raise CollectionManifestError(f"tests[{index}].parameters must be an object")
+                f"tests[{index}].parameters must contain only redacted values"
+            )
+        inert_parameters = _redacted_parameters(parameters)
         tags = _unique_strings(item["tags"], name=f"tests[{index}].tags")
         module_name = _string(item["module_name"], name=f"tests[{index}].module_name")
         function_name = _string(item["function_name"], name=f"tests[{index}].function_name")
@@ -976,8 +1212,16 @@ def verify_trusted_collection_manifest(
         files, issues = enumerate_test_files(inputs)
         if issues:
             return False
-        actual = {_relative_to_root(path, root): _hash_source(path) for path in files}
         expected = {fingerprint.path: fingerprint.sha256 for fingerprint in validated.files}
+        actual_test_paths = {_relative_to_root(path, root) for path in files}
+        if not actual_test_paths.issubset(expected):
+            return False
+        actual: dict[str, str] = {}
+        for relative_path in expected:
+            source = (root / relative_path).resolve()
+            if _relative_to_root(source, root) != relative_path:
+                return False
+            actual[relative_path] = _hash_source(source)
         return actual == expected
     except (CollectionManifestError, OSError, TypeError, ValueError):
         return False

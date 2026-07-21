@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+import testenix.tuning as tuning_module
 from testenix.cli import main
 from testenix.config import TestenixConfig, load_config, write_worker_recommendation
 from testenix.contracts import RunResult, Status, TestResult, TestSpec
@@ -294,6 +300,98 @@ def test_run_tuning_rejects_changed_outcomes() -> None:
         )
 
 
+def test_run_tuning_discards_result_when_project_sources_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    suite = tmp_path / "tests_testenix"
+    suite.mkdir()
+    test_source = suite / "test_sample.py"
+    test_source.write_text("def test_sample(): assert True\n", encoding="utf-8")
+    helper = tmp_path / "project_helper.py"
+    helper.write_text("VALUE = 1\n", encoding="utf-8")
+    spec = _spec("sample", path=str(test_source))
+    calls = 0
+
+    def measure(paths: tuple[str, ...], config: TestenixConfig) -> tuple[float, RunResult]:
+        nonlocal calls
+        del paths, config
+        calls += 1
+        if calls == 2:
+            helper.write_text("VALUE = 2\n", encoding="utf-8")
+        return 1.0, _run(spec)
+
+    with pytest.raises(TuningError, match="project sources changed"):
+        run_tuning(
+            ("tests_testenix",),
+            TestenixConfig(),
+            candidates=(1,),
+            warmups=0,
+            repeats=1,
+            native_measure=measure,
+        )
+
+
+def test_run_tuning_detects_source_changed_and_restored_inside_sample(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    suite = tmp_path / "tests_testenix"
+    suite.mkdir()
+    test_source = suite / "test_sample.py"
+    test_source.write_text("def test_sample(): assert True\n", encoding="utf-8")
+    helper = tmp_path / "project_helper.py"
+    original = "VALUE = 1\n"
+    helper.write_text(original, encoding="utf-8")
+    spec = _spec("sample", path=str(test_source))
+    calls = 0
+
+    def measure(paths: tuple[str, ...], config: TestenixConfig) -> tuple[float, RunResult]:
+        nonlocal calls
+        del paths, config
+        calls += 1
+        if calls == 2:
+            helper.write_text("VALUE = 2\n", encoding="utf-8")
+            assert helper.read_text(encoding="utf-8") == "VALUE = 2\n"
+            helper.write_text(original, encoding="utf-8")
+        return 1.0, _run(spec)
+
+    with pytest.raises(TuningError, match="project sources changed"):
+        run_tuning(
+            ("tests_testenix",),
+            TestenixConfig(),
+            candidates=(1,),
+            warmups=0,
+            repeats=1,
+            native_measure=measure,
+        )
+
+
+def test_tuning_source_snapshot_follows_source_directory_symlinks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    external = tmp_path / "external"
+    project.mkdir()
+    external.mkdir()
+    helper = external / "helper.py"
+    helper.write_text("VALUE = 1\n", encoding="utf-8")
+    linked = project / "linked_src"
+    try:
+        linked.symlink_to(external, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symbolic links are unavailable")
+    monkeypatch.chdir(project)
+
+    before = tuning_module._tuning_source_snapshot(("linked_src",))
+    helper.write_text("VALUE = 2\n", encoding="utf-8")
+
+    assert tuning_module._tuning_source_snapshot(("linked_src",)) != before
+
+
 def test_run_tuning_can_compare_pytest_without_cache() -> None:
     spec = _spec("ok")
     pytest_calls: list[tuple[str, ...]] = []
@@ -359,6 +457,315 @@ junit = "must-not-be-written.xml"
     assert not (tmp_path / "must-not-be-written.xml").exists()
 
 
+def test_tuning_subprocess_timeout_terminates_its_process_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeProcess:
+        pid = 4242
+
+        def __init__(self) -> None:
+            self.waits = 0
+            self.reaped = False
+
+        def wait(self, *, timeout: float) -> int:
+            self.waits += 1
+            if self.waits == 1:
+                raise subprocess.TimeoutExpired(("python",), timeout)
+            self.reaped = True
+            return -15
+
+        def poll(self) -> int | None:
+            return -15 if self.reaped else None
+
+        def kill(self) -> None:
+            raise AssertionError("process-group cleanup should reap the process")
+
+    process = FakeProcess()
+    popen_options: dict[str, object] = {}
+    killed_groups: list[tuple[int, int]] = []
+    killed_processes: list[tuple[int, int]] = []
+
+    def fake_popen(command: object, **options: object) -> FakeProcess:
+        assert command == ("python", "suite.py")
+        popen_options.update(options)
+        return process
+
+    class FakeTracker:
+        def __init__(self, pid: int) -> None:
+            assert pid == 4242
+
+        def stop(self) -> dict[int, str]:
+            return {5001: "worker-a", 5000: "worker-b"}
+
+    monkeypatch.setattr(tuning_module.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(tuning_module, "_PosixTreeTracker", FakeTracker)
+    monkeypatch.setattr(tuning_module, "_posix_descendant_pids", lambda pid: (5001, 5000))
+    monkeypatch.setattr(
+        tuning_module,
+        "_process_identity",
+        lambda pid: {5001: "worker-a", 5000: "worker-b"}.get(pid),
+    )
+    monkeypatch.setattr(
+        tuning_module,
+        "os",
+        SimpleNamespace(
+            name="posix",
+            getpgid=lambda pid: 4242,
+            getpgrp=lambda: 9999,
+            kill=lambda pid, sig: killed_processes.append((pid, sig)),
+            killpg=lambda pid, sig: killed_groups.append((pid, sig)),
+        ),
+    )
+
+    with pytest.raises(TuningError, match="2s per-run deadline"):
+        tuning_module._run_bounded_process(
+            ("python", "suite.py"),
+            env={},
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2.0,
+            label="native sample",
+        )
+
+    assert popen_options["start_new_session"] is True
+    assert killed_groups == [
+        (4242, tuning_module.signal.SIGTERM),
+        (4242, tuning_module.signal.SIGKILL),
+    ]
+    assert killed_processes == []
+
+
+def test_posix_descendant_snapshot_is_deepest_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    completed = SimpleNamespace(
+        returncode=0,
+        stdout="1 0\n10 1\n11 10\n12 1\n99 77\ninvalid\n",
+    )
+    monkeypatch.setattr(tuning_module.subprocess, "run", lambda *args, **kwargs: completed)
+
+    assert tuning_module._posix_descendant_pids(1) == (11, 10, 12)
+
+
+def test_posix_cleanup_never_signals_a_recycled_descendant_or_root_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    killed_groups: list[tuple[int, int]] = []
+    monkeypatch.setattr(tuning_module, "_process_identity", lambda pid: "new-process")
+    monkeypatch.setattr(
+        tuning_module,
+        "os",
+        SimpleNamespace(
+            getpgrp=lambda: 9999,
+            getpgid=lambda pid: pytest.fail(f"recycled PID {pid} must not be resolved"),
+            killpg=lambda group, sig: killed_groups.append((group, sig)),
+        ),
+    )
+
+    tuning_module._posix_signal_tree(
+        4242,
+        {5001: "old-process"},
+        tuning_module.signal.SIGKILL,
+        root_group_owned=False,
+    )
+
+    assert killed_groups == []
+
+
+def test_windows_tuning_timeout_closes_kill_job_before_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeProcess:
+        pid = 4343
+
+        def __init__(self) -> None:
+            self.waits = 0
+            self.reaped = False
+
+        def wait(self, *, timeout: float) -> int:
+            self.waits += 1
+            if self.waits == 1:
+                raise subprocess.TimeoutExpired(("python",), timeout)
+            self.reaped = True
+            return -9
+
+        def poll(self) -> int | None:
+            return -9 if self.reaped else None
+
+        def kill(self) -> None:
+            self.reaped = True
+
+    class FakeJob:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def terminate(self) -> bool:
+            self.closed = True
+            return True
+
+        def close(self) -> bool:
+            self.closed = True
+            return True
+
+    process = FakeProcess()
+    job = FakeJob()
+    popen_options: dict[str, object] = {}
+
+    def fake_popen(command: object, **options: object) -> FakeProcess:
+        del command
+        popen_options.update(options)
+        return process
+
+    monkeypatch.setattr(tuning_module.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(
+        tuning_module.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("taskkill fallback must not run with a Job Object"),
+    )
+    monkeypatch.setattr(tuning_module, "_windows_kill_job", lambda candidate: job)
+    monkeypatch.setattr(tuning_module, "_resume_windows_process", lambda candidate: None)
+    monkeypatch.setattr(tuning_module, "os", SimpleNamespace(name="nt"))
+
+    with pytest.raises(TuningError, match="per-run deadline"):
+        tuning_module._run_bounded_process(
+            ("python", "suite.py"),
+            env={},
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2.0,
+            label="windows sample",
+        )
+
+    assert job.closed
+    assert popen_options["creationflags"] == (
+        getattr(tuning_module.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+        | getattr(tuning_module.subprocess, "CREATE_SUSPENDED", 0x00000004)
+    )
+
+
+def test_windows_tuning_fails_closed_before_resuming_without_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeProcess:
+        pid = 4545
+
+        def __init__(self) -> None:
+            self.killed = False
+
+        def kill(self) -> None:
+            self.killed = True
+
+        def wait(self, *, timeout: float) -> int:
+            assert timeout == tuning_module._PROCESS_TERMINATION_GRACE
+            return -9
+
+    process = FakeProcess()
+    popen_options: dict[str, object] = {}
+
+    def fake_popen(command: object, **options: object) -> FakeProcess:
+        del command
+        popen_options.update(options)
+        return process
+
+    monkeypatch.setattr(tuning_module.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(tuning_module, "_windows_kill_job", lambda candidate: None)
+    monkeypatch.setattr(tuning_module, "os", SimpleNamespace(name="nt"))
+
+    with pytest.raises(TuningError, match="kill-on-close Job Object"):
+        tuning_module._run_bounded_process(
+            ("python", "suite.py"),
+            env={},
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2.0,
+            label="windows sample",
+        )
+
+    assert process.killed
+    assert int(popen_options["creationflags"]) & 0x00000004
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-tree regression")
+def test_tuning_timeout_kills_a_descendant_that_created_its_own_session(
+    tmp_path: Path,
+) -> None:
+    child_pid_path = tmp_path / "child.pid"
+    child_source = "import os, time; os.setsid(); time.sleep(30)"
+    parent_source = (
+        "import pathlib, subprocess, sys, time; "
+        f"child = subprocess.Popen([sys.executable, '-c', {child_source!r}]); "
+        f"pathlib.Path({str(child_pid_path)!r}).write_text(str(child.pid)); "
+        "time.sleep(30)"
+    )
+
+    with pytest.raises(TuningError, match="per-run deadline"):
+        tuning_module._run_bounded_process(
+            (sys.executable, "-c", parent_source),
+            env=os.environ,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=1.0,
+            label="detached-child sample",
+        )
+
+    child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        try:
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail(f"detached timing descendant {child_pid} survived timeout cleanup")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-tree regression")
+def test_tuning_cleans_detached_child_after_fast_successful_leader(
+    tmp_path: Path,
+) -> None:
+    ready = tmp_path / "child-ready"
+    marker = tmp_path / "orphan-finished"
+    child_source = (
+        "import os, pathlib, sys, time\n"
+        "os.setsid()\n"
+        "pathlib.Path(sys.argv[1]).write_text('ready', encoding='utf-8')\n"
+        "time.sleep(0.8)\n"
+        "pathlib.Path(sys.argv[2]).write_text('orphan', encoding='utf-8')\n"
+    )
+    parent_source = (
+        "import pathlib, subprocess, sys, time\n"
+        f"ready = pathlib.Path({str(ready)!r})\n"
+        f"subprocess.Popen([sys.executable, '-c', {child_source!r}, str(ready), "
+        f"{str(marker)!r}])\n"
+        "deadline = time.monotonic() + 2\n"
+        "while not ready.exists() and time.monotonic() < deadline:\n"
+        "    time.sleep(0.005)\n"
+        "time.sleep(0.05)\n"
+    )
+
+    assert (
+        tuning_module._run_bounded_process(
+            (sys.executable, "-c", parent_source),
+            env=os.environ,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2.0,
+            label="fast-leader sample",
+        )
+        == 0
+    )
+
+    assert ready.exists()
+    time.sleep(1.0)
+    assert not marker.exists()
+
+
+def test_run_tuning_rejects_invalid_per_run_deadline() -> None:
+    with pytest.raises(ValueError, match="run_timeout"):
+        run_tuning(("tests",), TestenixConfig(), run_timeout=0.0)
+
+
 def test_worker_recommendation_updates_only_the_testenix_table(tmp_path: Path) -> None:
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text(
@@ -413,6 +820,21 @@ def test_worker_recommendation_preserves_crlf_and_rejects_symlinks(tmp_path: Pat
     assert load_config(pyproject).workers == 3
 
 
+def test_worker_recommendation_compare_and_swap_preserves_concurrent_edit(
+    tmp_path: Path,
+) -> None:
+    pyproject = tmp_path / "pyproject.toml"
+    original = b'[tool.testenix]\npaths = ["tests_testenix"]\n'
+    concurrent = b'[tool.testenix]\npaths = ["changed_elsewhere"]\n'
+    pyproject.write_bytes(original)
+    pyproject.write_bytes(concurrent)
+
+    with pytest.raises(ValueError, match="configuration changed while tuning"):
+        write_worker_recommendation(pyproject, 4, expected_source=original)
+
+    assert pyproject.read_bytes() == concurrent
+
+
 def test_tune_cli_never_writes_config_without_explicit_flag(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -430,6 +852,72 @@ def test_tune_cli_never_writes_config_without_explicit_flag(
     assert main(["tune", "--config", str(pyproject), "--write"]) == 0
     assert load_config(pyproject).workers == 2
     assert "Wrote workers = 2" in capsys.readouterr().out
+
+
+def test_tune_write_refuses_configuration_changed_during_measurement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    pyproject = tmp_path / "pyproject.toml"
+    original = '[tool.testenix]\npaths = ["tests_testenix"]\n'
+    changed = '[tool.testenix]\npaths = ["other_tests"]\n'
+    pyproject.write_text(original, encoding="utf-8")
+
+    def measure(*args: object, **kwargs: object) -> TuningReport:
+        del args, kwargs
+        pyproject.write_text(changed, encoding="utf-8")
+        return _report()
+
+    monkeypatch.setattr("testenix.tuning.run_tuning", measure)
+
+    assert main(["tune", "--config", str(pyproject), "--write"]) == 3
+    assert pyproject.read_text(encoding="utf-8") == changed
+    assert "configuration changed while tuning" in capsys.readouterr().err
+
+
+def test_tune_write_refuses_edit_in_the_final_write_window(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    pyproject = tmp_path / "pyproject.toml"
+    original = b'[tool.testenix]\npaths = ["tests_testenix"]\n'
+    concurrent = b'[tool.testenix]\npaths = ["changed_elsewhere"]\n'
+    pyproject.write_bytes(original)
+    monkeypatch.setattr("testenix.tuning.run_tuning", lambda *args, **kwargs: _report())
+    real_write = write_worker_recommendation
+
+    def edit_then_write(
+        path: str | Path,
+        workers: int,
+        *,
+        expected_source: bytes | None,
+    ) -> bool:
+        pyproject.write_bytes(concurrent)
+        return real_write(path, workers, expected_source=expected_source)
+
+    monkeypatch.setattr("testenix.config.write_worker_recommendation", edit_then_write)
+
+    assert main(["tune", "--config", str(pyproject), "--write"]) == 3
+    assert pyproject.read_bytes() == concurrent
+    assert "configuration changed while tuning" in capsys.readouterr().err
+
+
+def test_tune_cli_passes_per_run_deadline_to_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[float] = []
+
+    def measure(*args: object, **kwargs: object) -> TuningReport:
+        del args
+        observed.append(float(kwargs["run_timeout"]))
+        return _report()
+
+    monkeypatch.setattr("testenix.tuning.run_tuning", measure)
+
+    assert main(["tune", "tests_testenix", "--run-timeout", "12.5"]) == 0
+    assert observed == [12.5]
 
 
 def test_tune_cli_json_stdout_is_machine_readable(
@@ -578,6 +1066,7 @@ def test_tune_cli_contains_unexpected_exceptions(
         ("--candidates", "1,,2"),
         ("--repeats", "0"),
         ("--warmups", "-1"),
+        ("--run-timeout", "0"),
     ],
 )
 def test_tune_cli_rejects_invalid_measurement_options(arguments: tuple[str, ...]) -> None:

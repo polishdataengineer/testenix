@@ -21,6 +21,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
+if __package__:
+    from benchmarks.process_control import run_bounded_process
+else:  # direct ``python benchmarks/run_benchmark.py`` execution
+    from process_control import run_bounded_process
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -177,10 +182,8 @@ def _run_once(
     timeout: float,
 ) -> tuple[float, int, int, int | None]:
     started = time.perf_counter()
-    completed = subprocess.run(
+    completed = run_bounded_process(
         command,
-        capture_output=True,
-        text=True,
         env=environment,
         cwd=working_directory,
         timeout=timeout,

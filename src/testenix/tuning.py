@@ -10,16 +10,22 @@ worker count.
 
 from __future__ import annotations
 
+import ctypes
+import functools
+import hashlib
 import json
 import math
 import os
+import signal
 import statistics
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence, Sized
 from collections.abc import Set as AbstractSet
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -38,10 +44,241 @@ _NEAR_BEST_FRACTION = 0.02
 _NEAR_BEST_SECONDS = 0.005
 _COLD_START_WORKERS = 4
 _MINIMUM_HISTORY_COVERAGE = 0.5
+DEFAULT_TUNING_RUN_TIMEOUT = 300.0
+_PROCESS_TERMINATION_GRACE = 2.0
+_PROCESS_TRACKER_INTERVAL = 0.02
+_SOURCE_SUFFIXES = frozenset({".py", ".pyi", ".toml"})
+_SOURCE_SCAN_EXCLUSIONS = frozenset(
+    {
+        ".git",
+        ".mypy_cache",
+        ".nox",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".testenix",
+        ".tox",
+        ".venv",
+        "__pycache__",
+        "node_modules",
+    }
+)
+
+_ProcessIdentity = tuple[int, int] | str
 
 
 class TuningError(RuntimeError):
     """Raised when a tuning sample cannot produce a trustworthy recommendation."""
+
+
+@dataclass(slots=True)
+class _WindowsKillJob:
+    """Small kill-on-close Job Object wrapper used only on Windows."""
+
+    kernel32: Any
+    handle: Any
+    closed: bool = False
+
+    def terminate(self, exit_code: int = 1) -> bool:
+        if self.closed:
+            return True
+        try:
+            return bool(self.kernel32.TerminateJobObject(self.handle, exit_code))
+        except Exception:
+            return False
+
+    def close(self) -> bool:
+        if self.closed:
+            return True
+        try:
+            closed = bool(self.kernel32.CloseHandle(self.handle))
+        except Exception:
+            return False
+        if closed:
+            self.closed = True
+        return closed
+
+
+@functools.lru_cache(maxsize=1)
+def _darwin_child_lister() -> Any | None:
+    """Return libproc's direct-child query without timing ``ps`` on macOS."""
+
+    if sys.platform != "darwin":
+        return None
+    try:
+        library = ctypes.CDLL("/usr/lib/libproc.dylib")
+        function = library.proc_listchildpids
+        function.argtypes = (ctypes.c_int, ctypes.c_void_p, ctypes.c_int)
+        function.restype = ctypes.c_int
+        return function
+    except (AttributeError, OSError):
+        return None
+
+
+@functools.lru_cache(maxsize=1)
+def _darwin_identity_probe() -> tuple[Any, type[ctypes.Structure]] | None:
+    if sys.platform != "darwin":
+        return None
+    try:
+
+        class _BsdInfo(ctypes.Structure):
+            _fields_ = [
+                ("flags", ctypes.c_uint32),
+                ("status", ctypes.c_uint32),
+                ("xstatus", ctypes.c_uint32),
+                ("pid", ctypes.c_uint32),
+                ("ppid", ctypes.c_uint32),
+                ("uid", ctypes.c_uint32),
+                ("gid", ctypes.c_uint32),
+                ("ruid", ctypes.c_uint32),
+                ("rgid", ctypes.c_uint32),
+                ("svuid", ctypes.c_uint32),
+                ("svgid", ctypes.c_uint32),
+                ("reserved", ctypes.c_uint32),
+                ("comm", ctypes.c_char * 16),
+                ("name", ctypes.c_char * 32),
+                ("nfiles", ctypes.c_uint32),
+                ("pgid", ctypes.c_uint32),
+                ("pjobc", ctypes.c_uint32),
+                ("tty_device", ctypes.c_uint32),
+                ("tty_pgid", ctypes.c_uint32),
+                ("nice", ctypes.c_int32),
+                ("start_seconds", ctypes.c_uint64),
+                ("start_microseconds", ctypes.c_uint64),
+            ]
+
+        library = ctypes.CDLL("/usr/lib/libproc.dylib")
+        function = library.proc_pidinfo
+        function.argtypes = (
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_uint64,
+            ctypes.c_void_p,
+            ctypes.c_int,
+        )
+        function.restype = ctypes.c_int
+        return function, _BsdInfo
+    except (AttributeError, OSError):
+        return None
+
+
+def _process_identity(pid: int) -> _ProcessIdentity | None:
+    """Return a creation token so cleanup never signals a recycled PID."""
+
+    if sys.platform.startswith("linux"):
+        try:
+            stat_line = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+            fields_after_name = stat_line.rsplit(")", 1)[1].split()
+            return fields_after_name[19]
+        except (IndexError, OSError):
+            return None
+    if sys.platform == "darwin":
+        probe = _darwin_identity_probe()
+        if probe is None:
+            return None
+        function, structure = probe
+        information = structure()
+        size = ctypes.sizeof(information)
+        if function(pid, 3, 0, ctypes.byref(information), size) != size:
+            return None
+        return int(information.start_seconds), int(information.start_microseconds)
+    try:
+        completed = subprocess.run(
+            ("ps", "-o", "lstart=", "-p", str(pid)),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+            timeout=_PROCESS_TERMINATION_GRACE,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    token = completed.stdout.strip()
+    return token if completed.returncode == 0 and token else None
+
+
+def _posix_direct_children(pid: int) -> tuple[int, ...]:
+    """Read direct children cheaply enough for continuous timing containment."""
+
+    if sys.platform.startswith("linux"):
+        children: set[int] = set()
+        try:
+            for child_file in Path(f"/proc/{pid}/task").glob("*/children"):
+                raw = child_file.read_text(encoding="ascii")
+                children.update(int(value) for value in raw.split())
+        except (OSError, ValueError):
+            pass
+        return tuple(sorted(children))
+    if sys.platform == "darwin":
+        function = _darwin_child_lister()
+        if function is not None:
+            values = (ctypes.c_int * 4096)()
+            count = function(pid, values, ctypes.sizeof(values))
+            if count > 0:
+                return tuple(values[: min(count, len(values))])
+            return ()
+    return _posix_descendant_pids(pid)
+
+
+class _PosixTreeTracker:
+    """Remember workers before a short-lived coordinator can orphan them."""
+
+    def __init__(self, root_pid: int) -> None:
+        self.root_pid = root_pid
+        self._root_identity = _process_identity(root_pid)
+        self._identities: dict[int, _ProcessIdentity] = {}
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._capture()
+        self._thread.start()
+
+    def _capture(self) -> None:
+        with self._lock:
+            known = {
+                pid: identity
+                for pid, identity in self._identities.items()
+                if _process_identity(pid) == identity
+            }
+        root_is_current = (
+            self._root_identity is not None
+            and _process_identity(self.root_pid) == self._root_identity
+        )
+        pending = [*([self.root_pid] if root_is_current else []), *known]
+        visited: set[int] = set()
+        discovered: set[int] = set()
+        while pending:
+            parent = pending.pop()
+            if parent in visited:
+                continue
+            visited.add(parent)
+            for child in _posix_direct_children(parent):
+                if child <= 0 or child == os.getpid():
+                    continue
+                if child not in discovered:
+                    discovered.add(child)
+                    pending.append(child)
+        live = dict(known)
+        for pid in discovered:
+            identity = _process_identity(pid)
+            if identity is not None:
+                live[pid] = identity
+        with self._lock:
+            self._identities = live
+
+    def _run(self) -> None:
+        while not self._stop.wait(_PROCESS_TRACKER_INTERVAL):
+            self._capture()
+
+    def stop(self) -> dict[int, _ProcessIdentity]:
+        self._stop.set()
+        self._thread.join(timeout=_PROCESS_TERMINATION_GRACE)
+        self._capture()
+        with self._lock:
+            return {
+                pid: identity
+                for pid, identity in self._identities.items()
+                if _process_identity(pid) == identity
+            }
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +349,7 @@ class TuningReport:
     pytest_samples: tuple[float, ...] = ()
     shard_modules: bool = False
     manifest_used: bool = False
+    run_timeout: float = DEFAULT_TUNING_RUN_TIMEOUT
 
     @property
     def pytest_median(self) -> float | None:
@@ -149,6 +387,7 @@ class TuningReport:
                 "history": "disabled",
                 "manifest": self.manifest_used,
                 "shard_modules": self.shard_modules,
+                "run_timeout_seconds": self.run_timeout,
             },
             "candidates": [candidate.to_dict() for candidate in self.candidates],
         }
@@ -392,6 +631,7 @@ def run_tuning(
     candidates: Sequence[int] | None = None,
     warmups: int = 1,
     repeats: int = 5,
+    run_timeout: float = DEFAULT_TUNING_RUN_TIMEOUT,
     pytest_paths: Sequence[str] = (),
     native_measure: NativeMeasure | None = None,
     pytest_measure: PytestMeasure | None = None,
@@ -408,11 +648,50 @@ def run_tuning(
         raise ValueError("warmups must be at least 0")
     if repeats < 1:
         raise ValueError("repeats must be at least 1")
+    if not math.isfinite(run_timeout) or run_timeout <= 0.0:
+        raise ValueError("run_timeout must be a finite number greater than zero")
     effective_paths = tuple(paths) if paths else config.paths
-    measure_native = _measure_native if native_measure is None else native_measure
+    effective_pytest_paths = tuple(pytest_paths)
+    snapshot_paths = (*effective_paths, *effective_pytest_paths)
+    if config.manifest_path is not None:
+        snapshot_paths = (*snapshot_paths, str(config.manifest_path))
+    source_snapshot: tuple[tuple[str, str], ...] | None
+    require_source_snapshot = native_measure is None or (
+        bool(effective_pytest_paths) and pytest_measure is None
+    )
+    try:
+        source_snapshot = _tuning_source_snapshot(snapshot_paths)
+    except TuningError:
+        if require_source_snapshot:
+            raise
+        # Injected measurement callbacks are a library/testing seam and may
+        # deliberately use virtual paths.  Real subprocess measurements never
+        # bypass source immutability checks.
+        source_snapshot = None
+
+    def require_unchanged_sources(label: str) -> None:
+        if source_snapshot is None:
+            return
+        if _tuning_source_snapshot(snapshot_paths) != source_snapshot:
+            raise TuningError(
+                f"project sources changed during {label}; tuning result was discarded"
+            )
+
+    measure_native: NativeMeasure
+    if native_measure is None:
+
+        def default_native_measure(
+            measured_paths: Sequence[str], measured_config: TestenixConfig
+        ) -> tuple[float, RunResult]:
+            return _measure_native(measured_paths, measured_config, timeout=run_timeout)
+
+        measure_native = default_native_measure
+    else:
+        measure_native = native_measure
     base = config.with_overrides(history_path=None, json_path=None, junit_path=None)
 
     _, probe = measure_native(effective_paths, base.with_overrides(workers=1))
+    require_unchanged_sources("one-worker probe")
     _require_green(probe, "one-worker probe")
     specs = tuple(result.test for result in probe.tests)
     durations = {result.test.id: result.duration for result in probe.tests}
@@ -439,19 +718,29 @@ def run_tuning(
         )
     signature = _result_signature(probe)
 
-    effective_pytest_paths = tuple(pytest_paths)
-    measure_pytest = _measure_pytest if pytest_measure is None else pytest_measure
+    measure_pytest: PytestMeasure
+    if pytest_measure is None:
+
+        def default_pytest_measure(measured_paths: Sequence[str]) -> tuple[float, int]:
+            return _measure_pytest(measured_paths, timeout=run_timeout)
+
+        measure_pytest = default_pytest_measure
+    else:
+        measure_pytest = pytest_measure
     pytest_samples: list[float] = []
 
     for warmup in range(warmups):
         if effective_pytest_paths and warmup % 2:
             elapsed, return_code = measure_pytest(effective_pytest_paths)
+            require_unchanged_sources("pytest warmup")
             _validate_pytest_sample(elapsed, return_code, label="warmup")
         for workers in selected_candidates:
             _, result = measure_native(effective_paths, base.with_overrides(workers=workers))
+            require_unchanged_sources(f"warmup with {workers} workers")
             _require_matching(result, signature, f"warmup with {workers} workers")
         if effective_pytest_paths and warmup % 2 == 0:
             elapsed, return_code = measure_pytest(effective_pytest_paths)
+            require_unchanged_sources("pytest warmup")
             _validate_pytest_sample(elapsed, return_code, label="warmup")
 
     samples: dict[int, list[float]] = {workers: [] for workers in selected_candidates}
@@ -459,6 +748,7 @@ def run_tuning(
         order = selected_candidates if repeat % 2 == 0 else tuple(reversed(selected_candidates))
         if effective_pytest_paths and repeat % 2:
             elapsed, return_code = measure_pytest(effective_pytest_paths)
+            require_unchanged_sources("pytest sample")
             _validate_pytest_sample(elapsed, return_code)
             pytest_samples.append(elapsed)
         for workers in order:
@@ -466,12 +756,14 @@ def run_tuning(
                 effective_paths,
                 base.with_overrides(workers=workers),
             )
+            require_unchanged_sources(f"sample with {workers} workers")
             _require_matching(result, signature, f"sample with {workers} workers")
             if not math.isfinite(elapsed) or elapsed < 0.0:
                 raise TuningError("native timer returned an invalid duration")
             samples[workers].append(elapsed)
         if effective_pytest_paths and repeat % 2 == 0:
             elapsed, return_code = measure_pytest(effective_pytest_paths)
+            require_unchanged_sources("pytest sample")
             _validate_pytest_sample(elapsed, return_code)
             pytest_samples.append(elapsed)
 
@@ -498,6 +790,7 @@ def run_tuning(
         pytest_samples=tuple(pytest_samples),
         shard_modules=config.shard_modules,
         manifest_used=config.manifest_path is not None,
+        run_timeout=run_timeout,
     )
 
 
@@ -510,6 +803,7 @@ def render_tuning_report(report: TuningReport) -> str:
             f"{report.execution_units} execution units"
         ),
         "Measurement: fresh-process wall clock | history: disabled (--no-history)",
+        f"Per-run deadline: {report.run_timeout:g}s (platform-aware bounded cleanup)",
         (
             "Scheduling: safe intra-module sharding"
             if report.shard_modules
@@ -596,6 +890,105 @@ def _normalise_candidates(candidates: Sequence[int]) -> tuple[int, ...]:
     return tuple(sorted(normalised))
 
 
+def _tuning_source_snapshot(paths: Sequence[str]) -> tuple[tuple[str, str], ...]:
+    """Fingerprint project Python/TOML inputs and every explicit file path.
+
+    Measurements are invalid if test bodies, imported project helpers, the
+    project configuration, or a trusted manifest changes between samples.
+    Virtual environments and common cache directories are excluded so
+    the snapshot remains project-local and stable.
+    """
+
+    selected: set[Path] = set()
+    scan_roots: set[Path] = {Path.cwd().resolve()}
+    for raw_path in paths:
+        candidate = Path(raw_path).expanduser()
+        if not candidate.exists() and "::" in raw_path:
+            # pytest node IDs are valid comparison inputs, while their source
+            # component remains the filesystem object that must be hashed.
+            candidate = Path(raw_path.split("::", 1)[0]).expanduser()
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError as error:
+            raise TuningError(f"cannot fingerprint tuning input {candidate}: {error}") from error
+        if resolved.is_file():
+            selected.add(resolved)
+        elif resolved.is_dir():
+            scan_roots.add(resolved)
+        else:
+            raise TuningError(f"cannot fingerprint non-file tuning input: {candidate}")
+
+    pending_roots = sorted(scan_roots, key=lambda item: str(item), reverse=True)
+    visited_roots: set[Path] = set()
+    while pending_roots:
+        root = pending_roots.pop().resolve()
+        if root in visited_roots:
+            continue
+        visited_roots.add(root)
+        try:
+
+            def raise_walk_error(error: OSError) -> None:
+                raise error
+
+            walker = os.walk(root, onerror=raise_walk_error, followlinks=False)
+            for directory, directory_names, file_names in walker:
+                parent = Path(directory)
+                retained_directories: list[str] = []
+                for name in sorted(directory_names):
+                    child = parent / name
+                    if name in _SOURCE_SCAN_EXCLUSIONS or (child / "pyvenv.cfg").is_file():
+                        continue
+                    if child.is_symlink():
+                        target = child.resolve(strict=True)
+                        if target.is_dir() and target not in visited_roots:
+                            pending_roots.append(target)
+                        continue
+                    retained_directories.append(name)
+                directory_names[:] = retained_directories
+                for name in sorted(file_names):
+                    path = parent / name
+                    if path.suffix in _SOURCE_SUFFIXES:
+                        selected.add(path.resolve(strict=True))
+        except OSError as error:
+            raise TuningError(
+                f"cannot fingerprint project sources below {root}: {error}"
+            ) from error
+
+    fingerprints: list[tuple[str, str]] = []
+    for source in sorted(selected, key=lambda item: str(item)):
+        fingerprints.append((str(source), _source_identity_fingerprint(source)))
+    return tuple(fingerprints)
+
+
+def _source_identity_fingerprint(source: Path) -> str:
+    """Hash bytes plus immutable-enough metadata and reject an unstable read."""
+
+    try:
+        before = source.stat()
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        after = source.stat()
+    except OSError as error:
+        raise TuningError(f"cannot fingerprint project source {source}: {error}") from error
+    before_identity = (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    after_identity = (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    )
+    if before_identity != after_identity:
+        raise TuningError(f"project source changed while being fingerprinted: {source}")
+    metadata = ":".join(str(value) for value in after_identity)
+    return f"{digest}:{metadata}"
+
+
 def _result_signature(result: RunResult) -> tuple[tuple[str, str], ...]:
     return tuple(sorted((item.test.id, item.status.value) for item in result.tests))
 
@@ -630,6 +1023,8 @@ def _validate_pytest_sample(
 def _measure_native(
     paths: Sequence[str],
     config: TestenixConfig,
+    *,
+    timeout: float = DEFAULT_TUNING_RUN_TIMEOUT,
 ) -> tuple[float, RunResult]:
     with tempfile.TemporaryDirectory(prefix="testenix-tune-") as directory:
         report_path = Path(directory) / "result.json"
@@ -651,12 +1046,13 @@ def _measure_native(
         command.extend(paths)
 
         started = time.perf_counter()
-        completed = subprocess.run(
+        return_code = _run_bounded_process(
             command,
             env=_tuning_environment(),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            check=False,
+            timeout=timeout,
+            label="native Testenix sample",
         )
         elapsed = time.perf_counter() - started
         try:
@@ -664,9 +1060,9 @@ def _measure_native(
             result = _run_result_from_dict(document)
         except (OSError, json.JSONDecodeError, TuningError) as error:
             raise TuningError(
-                f"native timing subprocess failed with exit code {completed.returncode}"
+                f"native timing subprocess failed with exit code {return_code}"
             ) from error
-        if completed.returncode != result.exit_code:
+        if return_code != result.exit_code:
             raise TuningError("native timing subprocess exit code does not match its result report")
         return elapsed, result
 
@@ -690,7 +1086,11 @@ def _tuning_config_toml(config: TestenixConfig) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _measure_pytest(paths: Sequence[str]) -> tuple[float, int]:
+def _measure_pytest(
+    paths: Sequence[str],
+    *,
+    timeout: float = DEFAULT_TUNING_RUN_TIMEOUT,
+) -> tuple[float, int]:
     command = (
         sys.executable,
         "-m",
@@ -701,14 +1101,367 @@ def _measure_pytest(paths: Sequence[str]) -> tuple[float, int]:
         *paths,
     )
     started = time.perf_counter()
-    completed = subprocess.run(
+    return_code = _run_bounded_process(
         command,
         env=_tuning_environment(),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        check=False,
+        timeout=timeout,
+        label="pytest sample",
     )
-    return time.perf_counter() - started, completed.returncode
+    return time.perf_counter() - started, return_code
+
+
+def _run_bounded_process(
+    command: Sequence[str],
+    *,
+    env: Mapping[str, str],
+    stdout: int,
+    stderr: int,
+    timeout: float,
+    label: str,
+) -> int:
+    """Run one timing command with a bounded, platform-aware cleanup boundary.
+
+    POSIX detached descendants are captured by an immediate identity-aware
+    snapshot and poller. A child which calls ``setsid()`` and loses its leader
+    before that first snapshot remains a documented best-effort edge; Windows
+    uses kernel Job Object containment before the process is resumed.
+    """
+
+    if not math.isfinite(timeout) or timeout <= 0.0:
+        raise ValueError("subprocess timeout must be a finite number greater than zero")
+    options: dict[str, Any] = {
+        "env": dict(env),
+        "stdout": stdout,
+        "stderr": stderr,
+    }
+    if os.name == "nt":
+        creation_flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+        creation_flags |= getattr(subprocess, "CREATE_SUSPENDED", 0x00000004)
+        options["creationflags"] = creation_flags
+    else:
+        options["start_new_session"] = True
+    process = subprocess.Popen(tuple(command), **options)
+    windows_job: _WindowsKillJob | None = None
+    tracker: _PosixTreeTracker | None = None
+    cleanup_started = False
+    try:
+        windows_job = _windows_kill_job(process)
+        tracker = _PosixTreeTracker(process.pid) if os.name == "posix" else None
+        if os.name == "nt":
+            if windows_job is None:
+                raise TuningError(
+                    "cannot place Windows tuning process in a kill-on-close Job Object"
+                )
+            try:
+                _resume_windows_process(process)
+            except OSError as error:
+                raise TuningError(
+                    f"cannot start contained Windows tuning process: {error}"
+                ) from error
+        try:
+            return_code = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired as error:
+            cleanup_started = True
+            tracked_pids = tracker.stop() if tracker is not None else {}
+            _terminate_process_tree(
+                process,
+                windows_job,
+                tracked_pids=tracked_pids,
+            )
+            raise TuningError(f"{label} exceeded the {timeout:g}s per-run deadline") from error
+
+        if tracker is not None:
+            cleanup_started = True
+            tracked_pids = tracker.stop()
+            # A successful coordinator must not leave background workers. The
+            # remembered root PGID also catches an untracked same-session child
+            # after an unusually fast leader exit.
+            _posix_signal_tree(
+                process.pid,
+                tracked_pids,
+                signal.SIGKILL,
+                root_group_owned=False,
+            )
+        elif windows_job is not None:
+            cleanup_started = True
+            if not _cleanup_windows_tree(process, windows_job):
+                raise TuningError("could not verify cleanup of the Windows tuning process tree")
+        return return_code
+    except BaseException:
+        if not cleanup_started:
+            cleanup_started = True
+            try:
+                tracked_pids = tracker.stop() if tracker is not None else {}
+            except Exception:
+                tracked_pids = {}
+            try:
+                _terminate_process_tree(
+                    process,
+                    windows_job,
+                    tracked_pids=tracked_pids,
+                )
+            except Exception:
+                with suppress(OSError, ValueError):
+                    process.kill()
+                with suppress(OSError, subprocess.TimeoutExpired):
+                    process.wait(timeout=_PROCESS_TERMINATION_GRACE)
+        raise
+    finally:
+        if tracker is not None:
+            tracker.stop()
+        if windows_job is not None:
+            windows_job.close()
+
+
+def _windows_kill_job(process: subprocess.Popen[Any]) -> _WindowsKillJob | None:
+    """Attach a kill-on-close Job Object when the Windows host allows it."""
+
+    if os.name != "nt":
+        return None
+    try:  # pragma: no cover - exercised by the Windows CI matrix.
+        from ctypes import wintypes
+
+        class _BasicLimitInformation(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.c_longlong),
+                ("PerJobUserTimeLimit", ctypes.c_longlong),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            ]
+
+        class _IoCounters(ctypes.Structure):
+            _fields_ = [
+                ("ReadOperationCount", ctypes.c_ulonglong),
+                ("WriteOperationCount", ctypes.c_ulonglong),
+                ("OtherOperationCount", ctypes.c_ulonglong),
+                ("ReadTransferCount", ctypes.c_ulonglong),
+                ("WriteTransferCount", ctypes.c_ulonglong),
+                ("OtherTransferCount", ctypes.c_ulonglong),
+            ]
+
+        class _ExtendedLimitInformation(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", _BasicLimitInformation),
+                ("IoInfo", _IoCounters),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+        kernel32.CreateJobObjectW.argtypes = (ctypes.c_void_p, wintypes.LPCWSTR)
+        kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+        kernel32.SetInformationJobObject.argtypes = (
+            wintypes.HANDLE,
+            ctypes.c_int,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+        )
+        kernel32.SetInformationJobObject.restype = wintypes.BOOL
+        kernel32.AssignProcessToJobObject.argtypes = (wintypes.HANDLE, wintypes.HANDLE)
+        kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+        kernel32.TerminateJobObject.argtypes = (wintypes.HANDLE, wintypes.UINT)
+        kernel32.TerminateJobObject.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel32.CloseHandle.restype = wintypes.BOOL
+
+        handle = kernel32.CreateJobObjectW(None, None)
+        if not handle:
+            return None
+        job = _WindowsKillJob(kernel32, handle)
+        information = _ExtendedLimitInformation()
+        information.BasicLimitInformation.LimitFlags = 0x00002000  # KILL_ON_JOB_CLOSE
+        configured = kernel32.SetInformationJobObject(
+            handle,
+            9,  # JobObjectExtendedLimitInformation
+            ctypes.byref(information),
+            ctypes.sizeof(information),
+        )
+        raw_process_handle = vars(process).get("_handle")
+        if raw_process_handle is None:
+            job.close()
+            return None
+        process_handle = wintypes.HANDLE(int(raw_process_handle))
+        if not configured or not kernel32.AssignProcessToJobObject(handle, process_handle):
+            job.close()
+            return None
+        return job
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+
+
+def _resume_windows_process(process: subprocess.Popen[Any]) -> None:
+    """Resume a suspended process only after Job Object containment exists."""
+
+    if os.name != "nt":
+        raise OSError("Windows process resume requested on a non-Windows host")
+    try:  # pragma: no cover - exercised by the Windows CI matrix.
+        from ctypes import wintypes
+
+        raw_process_handle = vars(process).get("_handle")
+        if raw_process_handle is None:
+            raise OSError("subprocess has no Windows process handle")
+        ntdll = ctypes.WinDLL("ntdll", use_last_error=True)  # type: ignore[attr-defined]
+        ntdll.NtResumeProcess.argtypes = (wintypes.HANDLE,)
+        ntdll.NtResumeProcess.restype = ctypes.c_long
+        status = ntdll.NtResumeProcess(wintypes.HANDLE(int(raw_process_handle)))
+        if status != 0:
+            raise OSError(f"NtResumeProcess failed with status 0x{status & 0xFFFFFFFF:08x}")
+    except (AttributeError, TypeError, ValueError) as error:
+        raise OSError(f"cannot resume contained Windows tuning process: {error}") from error
+
+
+def _terminate_process_tree(
+    process: subprocess.Popen[Any],
+    windows_job: _WindowsKillJob | None,
+    *,
+    tracked_pids: Mapping[int, _ProcessIdentity] | None = None,
+) -> None:
+    """Best-effort cross-platform cleanup for a spawned timing process tree."""
+
+    cleaned = True
+    if os.name == "nt":
+        cleaned = _cleanup_windows_tree(process, windows_job)
+    else:
+        descendants = dict(tracked_pids or {})
+        descendants.update(_identity_snapshot(_posix_descendant_pids(process.pid)))
+        _posix_signal_tree(
+            process.pid,
+            descendants,
+            signal.SIGTERM,
+            root_group_owned=process.poll() is None,
+        )
+        with suppress(OSError, subprocess.TimeoutExpired):
+            process.wait(timeout=_PROCESS_TERMINATION_GRACE)
+        # Testenix workers create their own sessions, so they can escape the
+        # coordinator's process group. Kill both the snapshotted descendants
+        # and the group: the former reaches detached workers, while the latter
+        # catches children created between the process-table snapshot and TERM.
+        descendants.update(_identity_snapshot(_posix_descendant_pids(process.pid)))
+        _posix_signal_tree(
+            process.pid,
+            descendants,
+            signal.SIGKILL,
+            root_group_owned=process.poll() is None,
+        )
+    if process.poll() is None:
+        with suppress(OSError):
+            process.kill()
+    with suppress(OSError, subprocess.TimeoutExpired):
+        process.wait(timeout=_PROCESS_TERMINATION_GRACE)
+    if os.name == "nt" and not cleaned:
+        raise TuningError("could not verify cleanup of the Windows tuning process tree")
+
+
+def _posix_signal_tree(
+    root_pid: int,
+    descendants: Mapping[int, _ProcessIdentity],
+    signum: int,
+    *,
+    root_group_owned: bool,
+) -> None:
+    """Signal only live identities, never a PID recycled during a long run."""
+
+    own_group = os.getpgrp()
+    groups = {root_pid} if root_group_owned else set()
+    for pid, identity in descendants.items():
+        if _process_identity(pid) != identity:
+            continue
+        with suppress(OSError):
+            group = os.getpgid(pid)
+            if group != own_group and _process_identity(pid) == identity:
+                groups.add(group)
+    groups.discard(own_group)
+    for group in groups:
+        with suppress(OSError):
+            os.killpg(group, signum)
+
+
+def _identity_snapshot(pids: Sequence[int]) -> dict[int, _ProcessIdentity]:
+    identities: dict[int, _ProcessIdentity] = {}
+    for pid in pids:
+        identity = _process_identity(pid)
+        if identity is not None:
+            identities[pid] = identity
+    return identities
+
+
+def _bounded_taskkill(pid: int) -> bool:
+    try:  # pragma: no cover - exercised by the Windows CI matrix.
+        completed = subprocess.run(
+            ("taskkill", "/PID", str(pid), "/T", "/F"),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=_PROCESS_TERMINATION_GRACE,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return completed.returncode == 0
+
+
+def _cleanup_windows_tree(
+    process: subprocess.Popen[Any],
+    windows_job: _WindowsKillJob | None,
+) -> bool:
+    if windows_job is not None:
+        terminated = windows_job.terminate()
+        closed = windows_job.close()
+        fallback = False if terminated or closed else _bounded_taskkill(process.pid)
+        cleaned = terminated or closed or fallback
+    else:
+        cleaned = _bounded_taskkill(process.pid)
+    with suppress(OSError, ValueError):
+        process.kill()
+    return cleaned
+
+
+def _posix_descendant_pids(root_pid: int) -> tuple[int, ...]:
+    """Snapshot descendants deepest-first without a third-party dependency."""
+
+    try:
+        completed = subprocess.run(
+            ("ps", "-axo", "pid=,ppid="),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+            timeout=_PROCESS_TERMINATION_GRACE,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ()
+    if completed.returncode != 0:
+        return ()
+
+    children: dict[int, list[int]] = {}
+    for line in completed.stdout.splitlines():
+        fields = line.split()
+        if len(fields) != 2:
+            continue
+        try:
+            pid, parent = (int(field) for field in fields)
+        except ValueError:
+            continue
+        children.setdefault(parent, []).append(pid)
+
+    depths: dict[int, int] = {}
+    pending = [(root_pid, 0)]
+    while pending:
+        parent, depth = pending.pop()
+        for child in children.get(parent, ()):
+            if child in depths:
+                continue
+            depths[child] = depth + 1
+            pending.append((child, depth + 1))
+    return tuple(sorted(depths, key=lambda pid: (-depths[pid], pid)))
 
 
 def _tuning_environment() -> dict[str, str]:

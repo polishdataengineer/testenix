@@ -222,12 +222,24 @@ testenix benchmark tests --candidates 1,2,4,8 --json reports/tuning.json
 testenix tune --write
 ```
 
-Tuning disables Testenix history for its samples and validates that every native candidate keeps
-the same inventory and outcomes. Its automatic sweep is resource-aware and conservatively stays
+Tuning disables Testenix history for its samples, gives every complete suite run a 300-second
+deadline by default, and validates that every native candidate keeps the same inventory and
+outcomes. On timeout it terminates the coordinator boundary and tracked workers; override the
+deadline with `--run-timeout SECONDS`. Windows uses a Job Object before process resume. POSIX always
+signals the new root session and identity-checks observed detached descendants; a process that calls
+`setsid()` and exits between creation and the first OS snapshot cannot be given an absolute
+kernel-containment guarantee, so benchmark hostile suites inside a container. The automatic sweep
+is resource-aware and conservatively stays
 within 1/2/4 workers; larger experiments require explicit `--candidates`. `--write` refuses to
 persist a workers-only recommendation if transient `--shard-modules`, `--no-shard-modules`, or
-`--manifest` settings differ from the loaded project profile. Its main result is the project-local
-worker recommendation. An
+`--manifest` settings differ from the loaded project profile, or if the configuration file changes
+while measurement is running. The writer compares the original bytes again immediately before its
+atomic replacement; an immutable checkout is still required to exclude an external writer racing
+that final filesystem operation. Tuning fingerprints project Python/TOML sources (including linked
+source directories), explicit suite files, and the trusted manifest before the probe and rechecks
+content plus file identity after every sample; any observed drift discards the result. Installed
+packages, non-source data, and other runtime dependencies remain external inputs.
+Its main result is the project-local worker recommendation. An
 optional `--pytest-source PATH` comparison is orientation for that exact source/native pair, not a
 publishable speed claim by itself; use the full benchmark contract below for public comparisons.
 
@@ -273,9 +285,11 @@ Module affinity remains the safe default: ordinary tests from one module stay in
 module fixtures and observable module state are not split across processes. Projects with a large
 module may explicitly request finer parallelism with `--shard-modules` or
 `shard_modules = true`. Testenix statically rejects splitting when it finds module/session fixtures,
-module-global mutation, or import-time lifecycle hazards such as eager calls in assignments,
-decorators, default arguments, or class bases. Function-scoped fixtures, including
-autouse fixtures, can be recreated per test. Static analysis cannot prove the absence of every
+module-global or mutable class state, nested mutable containers, imported fixture providers, or
+import-time lifecycle hazards such as eager calls in assignments, decorators, default arguments,
+or class bases. Function-scoped fixtures defined in the collected module, including autouse
+fixtures, can be recreated per test. Imported providers keep module affinity because their source
+is outside the manifest fingerprint boundary. Static analysis cannot prove the absence of every
 dynamic side effect, so this mode is opt-in and should first be exercised in CI.
 
 Normal execution imports each selected module during supervised collection and again in its
@@ -287,8 +301,11 @@ testenix manifest tests --output .testenix/collection.json
 testenix run tests --manifest .testenix/collection.json
 ```
 
-The manifest contains the complete selected Python-file inventory, SHA-256 fingerprints, collected
-tests, collection issues, and sharding decisions. Before trusting it, Testenix compares the requested
+The manifest contains every selected test file plus statically discoverable project-local Python
+import dependencies, SHA-256 fingerprints, collected tests, collection issues, and sharding
+decisions. Parameter names are retained, but their values are
+redacted because collection-time case data can contain credentials or other environment-derived
+secrets. Before trusting it, Testenix compares the requested
 roots, exact file inventory, and every source digest. Malformed manifest JSON is rejected; a missing,
 added, deleted, unreadable, or changed source marks a valid manifest stale and makes the runner fall
 back to normal isolated collection. It never executes a stale inventory. This is an explicit trust
@@ -369,6 +386,10 @@ canonical pytest and Testenix commands to the migrated source/output roots. With
 the result is explicitly diagnostic-only. Publishable source roots must be directories so support
 files such as `conftest.py` are covered. Manifest commands put all options before `--` and their
 exact suite roots after it, preventing an option value from being mistaken for the measured target.
+Duplicate performance flags are rejected, imported module files must belong to their claimed
+distributions, and every timeout performs bounded worker-tree cleanup before the next sample. The
+same Windows Job Object/POSIX identity-tracking boundary and POSIX `setsid()` caveat described for
+`testenix tune` apply to these harnesses.
 
 The separate safe-migration benchmark used 3,000 tests across 64 modules and four native workers.
 After conversion, pytest no-op tests ran in 0.521 seconds versus 1.539 seconds through sequential

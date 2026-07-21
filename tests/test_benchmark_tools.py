@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -13,12 +15,16 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 try:
     run_benchmark = importlib.import_module("benchmarks.run_benchmark")
+    run_migration_benchmark = importlib.import_module("benchmarks.run_migration_benchmark")
+    process_control = importlib.import_module("benchmarks.process_control")
     run_project_benchmark = importlib.import_module("benchmarks.run_project_benchmark")
     run_scaling_matrix = importlib.import_module("benchmarks.run_scaling_matrix")
 finally:
     sys.path.pop(0)
 
 _module_indexes = run_benchmark._module_indexes
+run_bounded_process = process_control.run_bounded_process
+_run_migration_process = run_migration_benchmark._run_process
 _display_command = run_project_benchmark._display_command
 _environment = run_project_benchmark._environment
 _explicit_suite_targets = run_project_benchmark._explicit_suite_targets
@@ -33,6 +39,7 @@ DEFAULT_HISTORIES = run_scaling_matrix.DEFAULT_HISTORIES
 DEFAULT_LAYOUTS = run_scaling_matrix.DEFAULT_LAYOUTS
 DEFAULT_SHARDING_MODES = run_scaling_matrix.DEFAULT_SHARDING_MODES
 DEFAULT_WORKERS = run_scaling_matrix.DEFAULT_WORKERS
+_reference_curve = run_scaling_matrix._reference_curve
 _validate_coverage = run_scaling_matrix._validate_coverage
 build_scenarios = run_scaling_matrix.build_scenarios
 
@@ -75,6 +82,253 @@ def test_default_scaling_sweeps_cover_every_required_axis() -> None:
     assert {
         scenario.module_layout for scenario in scenarios if scenario.sharding_mode == "safe"
     } == set(DEFAULT_LAYOUTS)
+
+
+def test_full_cross_product_exposes_a_canonical_reference_curve() -> None:
+    counts = (100, 500, 1_000, 3_000)
+    scenarios = build_scenarios(
+        counts=counts,
+        module_count=16,
+        workers=DEFAULT_WORKERS,
+        layouts=DEFAULT_LAYOUTS,
+        histories=DEFAULT_HISTORIES,
+        sharding_modes=DEFAULT_SHARDING_MODES,
+        dominant_fraction=0.5,
+        full_cross_product=True,
+        include_duration_skew=False,
+    )
+    measurement = {
+        "median": 1.0,
+        "median_tests_per_second": 100.0,
+        "observed_workers": [4],
+    }
+    results = [
+        {
+            "id": scenario.id,
+            "scenario": scenario,
+            "result": {"measurements": {"testenix": measurement}},
+        }
+        for scenario in scenarios
+    ]
+
+    curve = _reference_curve(results, reference_workers="auto")
+
+    assert [point["test_count"] for point in curve] == list(counts)
+    assert all(point["workers_requested"] == "auto" for point in curve)
+    assert all(point["history_mode"] == "disabled" for point in curve)
+    assert all(point["sharding_mode"] == "disabled" for point in curve)
+
+
+def test_full_cross_product_deduplicates_repeated_axes() -> None:
+    scenarios = build_scenarios(
+        counts=(100, 100),
+        module_count=4,
+        workers=("auto", "auto"),
+        layouts=("balanced",),
+        histories=("disabled",),
+        sharding_modes=("disabled",),
+        dominant_fraction=0.5,
+        full_cross_product=True,
+        include_duration_skew=False,
+    )
+
+    assert len(scenarios) == 1
+    assert scenarios[0].id == (
+        "tests-100-layout-balanced-workers-auto-history-disabled-sharding-disabled"
+    )
+
+
+def test_bounded_process_removes_detached_descendants_after_timeout(tmp_path: Path) -> None:
+    marker = tmp_path / "orphan-finished"
+    child_code = (
+        "import os, pathlib, sys, time\n"
+        "if os.name == 'posix':\n"
+        "    os.setsid()\n"
+        "time.sleep(0.8)\n"
+        "pathlib.Path(sys.argv[1]).write_text('orphan', encoding='utf-8')\n"
+    )
+    parent_code = (
+        "import subprocess, sys, time\n"
+        f"subprocess.Popen([sys.executable, '-c', {child_code!r}, {str(marker)!r}])\n"
+        "time.sleep(30)\n"
+    )
+    started = time.monotonic()
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        run_bounded_process(
+            (sys.executable, "-c", parent_code),
+            cwd=tmp_path,
+            env=os.environ,
+            timeout=0.3,
+        )
+
+    assert time.monotonic() - started < 6.0
+    time.sleep(1.0)
+    assert not marker.exists()
+
+
+def test_bounded_process_tracks_detached_child_before_leader_exits(tmp_path: Path) -> None:
+    ready = tmp_path / "child-ready"
+    marker = tmp_path / "orphan-finished"
+    child_code = (
+        "import os, pathlib, sys, time\n"
+        "if os.name == 'posix':\n"
+        "    os.setsid()\n"
+        "pathlib.Path(sys.argv[1]).write_text('ready', encoding='utf-8')\n"
+        "time.sleep(0.8)\n"
+        "pathlib.Path(sys.argv[2]).write_text('orphan', encoding='utf-8')\n"
+    )
+    parent_code = (
+        "import pathlib, subprocess, sys, time\n"
+        f"ready = pathlib.Path({str(ready)!r})\n"
+        f"subprocess.Popen([sys.executable, '-c', {child_code!r}, str(ready), {str(marker)!r}])\n"
+        "deadline = time.monotonic() + 2\n"
+        "while not ready.exists() and time.monotonic() < deadline:\n"
+        "    time.sleep(0.005)\n"
+        "time.sleep(0.05)\n"
+    )
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        run_bounded_process(
+            (sys.executable, "-c", parent_code),
+            cwd=tmp_path,
+            env=os.environ,
+            timeout=0.3,
+        )
+
+    assert ready.exists()
+    time.sleep(1.0)
+    assert not marker.exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="exercises POSIX process-group cleanup")
+def test_bounded_process_cleans_background_child_after_success(tmp_path: Path) -> None:
+    ready = tmp_path / "background-ready"
+    marker = tmp_path / "background-finished"
+    child_code = (
+        "import pathlib, sys, time\n"
+        "pathlib.Path(sys.argv[1]).write_text('ready', encoding='utf-8')\n"
+        "time.sleep(0.8)\n"
+        "pathlib.Path(sys.argv[2]).write_text('orphan', encoding='utf-8')\n"
+    )
+    parent_code = (
+        "import pathlib, subprocess, sys, time\n"
+        f"ready = pathlib.Path({str(ready)!r})\n"
+        f"subprocess.Popen([sys.executable, '-c', {child_code!r}, str(ready), "
+        f"{str(marker)!r}], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        "deadline = time.monotonic() + 2\n"
+        "while not ready.exists() and time.monotonic() < deadline:\n"
+        "    time.sleep(0.005)\n"
+        "time.sleep(0.05)\n"
+    )
+
+    completed = run_bounded_process(
+        (sys.executable, "-c", parent_code),
+        cwd=tmp_path,
+        env=os.environ,
+        timeout=2.0,
+    )
+
+    assert completed.returncode == 0
+    assert ready.exists()
+    time.sleep(1.0)
+    assert not marker.exists()
+
+
+def test_posix_tracker_discards_a_recycled_descendant_pid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tokens = {90_001: "root-v1", 90_002: "child-v1"}
+    children = {90_001: (90_002,), 90_002: ()}
+    monkeypatch.setattr(process_control, "_TRACKER_INTERVAL_SECONDS", 60.0)
+    monkeypatch.setattr(process_control, "_process_identity", tokens.get)
+    monkeypatch.setattr(
+        process_control,
+        "_posix_direct_children",
+        lambda pid: children.get(pid, ()),
+    )
+    tracker = process_control._PosixTreeTracker(90_001)
+    tokens[90_002] = "child-v2"
+    children[90_001] = ()
+
+    assert tracker.stop() == {}
+
+
+def test_posix_cleanup_does_not_signal_an_unowned_recycled_root_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    signalled: list[int] = []
+    monkeypatch.setattr(process_control.os, "getpgrp", lambda: 100)
+    monkeypatch.setattr(
+        process_control.os, "killpg", lambda group, _signal: signalled.append(group)
+    )
+
+    process_control._posix_signal_tree(
+        90_001,
+        {},
+        process_control.signal.SIGKILL,
+        root_group_owned=False,
+    )
+
+    assert signalled == []
+
+
+def test_windows_cleanup_falls_back_when_job_calls_fail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailedJob:
+        def terminate(self) -> bool:
+            return False
+
+        def close(self) -> bool:
+            return False
+
+    class FakeProcess:
+        pid = 1234
+
+        def __init__(self) -> None:
+            self.killed = False
+
+        def kill(self) -> None:
+            self.killed = True
+
+    process = FakeProcess()
+    observed: list[int] = []
+
+    def fake_taskkill(pid: int) -> bool:
+        observed.append(pid)
+        return True
+
+    monkeypatch.setattr(process_control, "_bounded_taskkill", fake_taskkill)
+
+    assert process_control._cleanup_windows_tree(process, FailedJob()) is True
+    assert observed == [1234]
+    assert process.killed is True
+
+
+def test_migration_benchmark_uses_bounded_process_runner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    def fake_run(command: object, **options: object) -> subprocess.CompletedProcess[str]:
+        observed["command"] = command
+        observed.update(options)
+        return subprocess.CompletedProcess(command, 0, "ok", "")
+
+    monkeypatch.setattr(run_migration_benchmark, "run_bounded_process", fake_run)
+
+    outcome = _run_migration_process(
+        (sys.executable, "-c", "pass"),
+        project=tmp_path,
+        environment={"NO_COLOR": "1"},
+    )
+
+    assert outcome.returncode == 0
+    assert outcome.stdout == "ok"
+    assert observed["cwd"] == tmp_path
+    assert observed["timeout"] == run_migration_benchmark.COMMAND_TIMEOUT_SECONDS
 
 
 def test_real_project_manifest_commands_are_arrays_and_redactable(tmp_path: Path) -> None:
@@ -137,6 +391,80 @@ def test_real_project_runner_contract_records_performance_switches() -> None:
         "safe_module_sharding": True,
     }
     assert _observed_testenix_workers("Testenix  |  3,000 tests  |  16 files  |  4 workers\n") == 4
+
+
+@pytest.mark.parametrize(
+    ("kind", "command"),
+    [
+        (
+            "pytest",
+            ["{python}", "-m", "pytest", "-n", "2", "--numprocesses=4", "tests"],
+        ),
+        (
+            "testenix",
+            [
+                "{python}",
+                "-m",
+                "testenix",
+                "run",
+                "--workers",
+                "2",
+                "-w=4",
+                "tests_testenix",
+            ],
+        ),
+    ],
+)
+def test_real_project_runner_contract_rejects_duplicate_worker_flags(
+    kind: str,
+    command: list[str],
+) -> None:
+    other = (
+        {"name": "testenix", "kind": "testenix", "command": ["{python}", "-m", "testenix", "run"]}
+        if kind == "pytest"
+        else {"name": "pytest", "kind": "pytest", "command": ["{python}", "-m", "pytest"]}
+    )
+    runner = next(
+        candidate
+        for candidate in _runners(
+            {
+                "runners": [
+                    {"name": kind, "kind": kind, "command": command},
+                    other,
+                ]
+            }
+        )
+        if candidate.kind == kind
+    )
+
+    with pytest.raises(RuntimeError, match="workers is configured more than once"):
+        _runner_contract(runner)
+
+
+def test_real_project_runner_contract_rejects_conflicting_history_flags() -> None:
+    runner = _runners(
+        {
+            "runners": [
+                {"name": "pytest", "kind": "pytest", "command": ["{python}", "-m", "pytest"]},
+                {
+                    "name": "testenix",
+                    "kind": "testenix",
+                    "command": [
+                        "{python}",
+                        "-m",
+                        "testenix",
+                        "run",
+                        "--history",
+                        "history.sqlite3",
+                        "--no-history",
+                    ],
+                },
+            ]
+        }
+    )[1]
+
+    with pytest.raises(RuntimeError, match="history is configured more than once"):
+        _runner_contract(runner)
 
 
 def test_real_project_manifest_requires_both_runners_and_same_python() -> None:
@@ -221,6 +549,15 @@ def test_real_project_runtime_identity_hashes_executed_package() -> None:
     assert identity["package_files"] > 0
     assert len(identity["package_sha256"]) == 64
     assert isinstance(identity["source_matches_distribution"], bool)
+
+
+def test_real_project_runtime_identity_rejects_unowned_source_override() -> None:
+    environment, _, _ = _environment({"environment": {"NO_COLOR": "1"}})
+    environment["PYTHONPATH"] = str(ROOT / "src")
+
+    identity = _testenix_runtime_identity(ROOT, environment)
+
+    assert identity["source_matches_distribution"] is False
 
 
 def test_tree_fingerprint_records_aggregate_metadata_only(tmp_path: Path) -> None:

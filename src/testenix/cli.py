@@ -239,6 +239,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="measured runs per candidate (default: 5)",
     )
     tune_parser.add_argument(
+        "--run-timeout",
+        type=_positive_float,
+        default=300.0,
+        metavar="SECONDS",
+        help="deadline for each complete suite run (default: 300)",
+    )
+    tune_parser.add_argument(
         "--pytest-source",
         dest="pytest_paths",
         action="append",
@@ -600,6 +607,13 @@ def _tune_command(arguments: argparse.Namespace) -> int:
     config = loaded_config.with_overrides(**tune_overrides)
     paths = tuple(arguments.paths) if arguments.paths else config.paths
     destination = config_path or Path("pyproject.toml")
+    configuration_snapshot: bytes | None = None
+    if arguments.write:
+        try:
+            configuration_snapshot = _read_optional_file(destination)
+        except ConfigError as error:
+            print(f"testenix: tuning error: {error}", file=sys.stderr)
+            return EXIT_USAGE
     if arguments.write and arguments.paths and not _same_paths(paths, config.paths):
         print(
             "testenix: tuning error: --write refuses to persist a recommendation for "
@@ -650,6 +664,7 @@ def _tune_command(arguments: argparse.Namespace) -> int:
             candidates=arguments.candidates,
             warmups=arguments.warmups,
             repeats=arguments.repeats,
+            run_timeout=arguments.run_timeout,
             pytest_paths=tuple(arguments.pytest_paths),
         )
     except KeyboardInterrupt:
@@ -674,7 +689,15 @@ def _tune_command(arguments: argparse.Namespace) -> int:
 
     if arguments.write:
         try:
-            changed = write_worker_recommendation(destination, report.recommended_workers)
+            if _read_optional_file(destination) != configuration_snapshot:
+                raise ConfigError(
+                    "configuration changed while tuning; recommendation was not written"
+                )
+            changed = write_worker_recommendation(
+                destination,
+                report.recommended_workers,
+                expected_source=configuration_snapshot,
+            )
         except ConfigError as error:
             print(f"testenix: cannot write tuning recommendation: {error}", file=sys.stderr)
             return EXIT_INTERNAL_ERROR
@@ -688,6 +711,15 @@ def _tune_command(arguments: argparse.Namespace) -> int:
 
 def _same_file_target(first: Path, second: Path) -> bool:
     return first.resolve(strict=False) == second.resolve(strict=False)
+
+
+def _read_optional_file(path: Path) -> bytes | None:
+    if not os.path.lexists(path):
+        return None
+    try:
+        return path.read_bytes()
+    except OSError as error:
+        raise ConfigError(f"cannot snapshot configuration {path}: {error}") from error
 
 
 def _different_tune_profile_overrides(

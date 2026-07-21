@@ -28,6 +28,13 @@ if TYPE_CHECKING:
 DEFAULT_HISTORY_PATH = Path(".testenix/history.sqlite3")
 
 
+class _ExpectedSourceUnset:
+    """Sentinel distinguishing an absent file from an omitted snapshot guard."""
+
+
+_EXPECTED_SOURCE_UNSET = _ExpectedSourceUnset()
+
+
 class ConfigError(ValueError):
     """Raised when Testenix configuration is malformed."""
 
@@ -198,13 +205,21 @@ def config_from_mapping(raw: Mapping[str, Any]) -> TestenixConfig:
         raise ConfigError(f"invalid [tool.testenix] configuration: {error}") from error
 
 
-def write_worker_recommendation(path: str | Path, workers: int) -> bool:
+def write_worker_recommendation(
+    path: str | Path,
+    workers: int,
+    *,
+    expected_source: bytes | None | _ExpectedSourceUnset = _EXPECTED_SOURCE_UNSET,
+) -> bool:
     """Atomically persist an explicit worker recommendation in ``pyproject.toml``.
 
     This operation is intentionally separate from loading and tuning.  Callers
     must expose an explicit user action (the CLI uses ``testenix tune --write``)
     before invoking it.  ``True`` means bytes changed; an already matching
-    configuration returns ``False``.
+    configuration returns ``False``.  When *expected_source* is supplied, it
+    acts as an optimistic byte-drift guard: ``None`` means the file must still
+    be absent, while bytes must still match exactly. The transformed content is
+    checked again immediately before the final atomic replacement.
     """
 
     if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
@@ -213,8 +228,10 @@ def write_worker_recommendation(path: str | Path, workers: int) -> bool:
     if config_path.is_symlink():
         raise ConfigError(f"refusing to replace symbolic link: {config_path}")
     try:
-        raw_source = config_path.read_bytes() if config_path.exists() else b""
-        source = raw_source.decode("utf-8")
+        raw_source = config_path.read_bytes() if config_path.exists() else None
+        if expected_source is not _EXPECTED_SOURCE_UNSET and raw_source != expected_source:
+            raise ConfigError("configuration changed while tuning; recommendation was not written")
+        source = (raw_source or b"").decode("utf-8")
     except (OSError, UnicodeDecodeError) as error:
         raise ConfigError(f"cannot read {config_path}: {error}") from error
 
@@ -250,8 +267,15 @@ def write_worker_recommendation(path: str | Path, workers: int) -> bool:
         raise ConfigError(f"cannot update {config_path}: {error}") from error
     updated = updated_normalised if newline == "\n" else updated_normalised.replace("\n", "\r\n")
     if source == updated:
+        current_source = config_path.read_bytes() if config_path.exists() else None
+        if current_source != raw_source:
+            raise ConfigError(
+                "configuration changed while preparing the update; recommendation was not written"
+            )
         return False
-    _atomic_write_text(config_path, updated)
+    # Always protect the read/transform/write cycle, even for library callers
+    # which did not provide a longer-lived tuning snapshot.
+    _atomic_write_text(config_path, updated, expected_source=raw_source)
     return True
 
 
@@ -282,7 +306,7 @@ def _set_workers_in_toml(source: str, workers: int) -> str:
     return source[:section_start] + updated_section + source[section_end:]
 
 
-def _atomic_write_text(path: Path, content: str) -> None:
+def _atomic_write_text(path: Path, content: str, *, expected_source: bytes | None) -> None:
     if path.is_symlink():
         raise ConfigError(f"refusing to replace symbolic link: {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -307,6 +331,11 @@ def _atomic_write_text(path: Path, content: str) -> None:
             temporary_path.chmod(existing_mode)
         if path.is_symlink():
             raise ConfigError(f"refusing to replace symbolic link: {path}")
+        current_source = path.read_bytes() if path.exists() else None
+        if current_source != expected_source:
+            raise ConfigError(
+                "configuration changed while preparing the update; recommendation was not written"
+            )
         os.replace(temporary_path, path)
         temporary_name = None
     except OSError as error:

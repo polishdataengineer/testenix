@@ -21,18 +21,17 @@ import tomllib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, TypeAlias
 
 if __package__:
-    from benchmarks.run_benchmark import (
-        HistoryMode,
-        ModuleLayout,
-        ShardingMode,
-        WorkerRequest,
-        run_benchmark,
-    )
+    from benchmarks.run_benchmark import run_benchmark
 else:  # direct ``python benchmarks/run_scaling_matrix.py`` execution
-    from run_benchmark import HistoryMode, ModuleLayout, ShardingMode, WorkerRequest, run_benchmark
+    from run_benchmark import run_benchmark
+
+ModuleLayout: TypeAlias = Literal["balanced", "dominant", "single"]
+HistoryMode: TypeAlias = Literal["disabled", "default"]
+WorkerRequest: TypeAlias = int | Literal["auto"]
+ShardingMode: TypeAlias = Literal["disabled", "safe"]
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_COUNTS = (100, 500, 1_000, 3_000)
@@ -121,6 +120,10 @@ def _deduplicate(scenarios: list[MatrixScenario]) -> tuple[MatrixScenario, ...]:
     return tuple(unique)
 
 
+def _reference_worker(workers: tuple[WorkerRequest, ...]) -> WorkerRequest:
+    return "auto" if "auto" in workers else (4 if 4 in workers else workers[0])
+
+
 def build_scenarios(
     *,
     counts: tuple[int, ...],
@@ -135,7 +138,7 @@ def build_scenarios(
 ) -> tuple[MatrixScenario, ...]:
     largest = max(counts)
     if full_cross_product:
-        return tuple(
+        scenarios = [
             MatrixScenario(
                 id=(
                     f"tests-{count}-layout-{layout}-workers-{worker}-history-{history}"
@@ -154,11 +157,10 @@ def build_scenarios(
             for worker in workers
             for history in histories
             for sharding in sharding_modes
-        )
+        ]
+        return _deduplicate(scenarios)
 
-    reference_workers: WorkerRequest = (
-        "auto" if "auto" in workers else (4 if 4 in workers else workers[0])
-    )
+    reference_workers = _reference_worker(workers)
     scenarios = [
         MatrixScenario(
             id=f"scale-{count}",
@@ -235,6 +237,42 @@ def build_scenarios(
             )
         )
     return _deduplicate(scenarios)
+
+
+def _reference_curve(
+    results: list[dict[str, Any]],
+    *,
+    reference_workers: WorkerRequest,
+) -> list[dict[str, Any]]:
+    """Project one canonical balanced/no-history point for every test count."""
+
+    points = (
+        {
+            "test_count": entry["scenario"].test_count,
+            "workers_requested": entry["scenario"].workers,
+            "history_mode": entry["scenario"].history_mode,
+            "sharding_mode": entry["scenario"].sharding_mode,
+            "measurements": {
+                name: {
+                    "median_seconds": measurement["median"],
+                    "median_tests_per_second": measurement["median_tests_per_second"],
+                    "observed_workers": measurement["observed_workers"],
+                }
+                for name, measurement in entry["result"]["measurements"].items()
+            },
+        }
+        for entry in results
+        if entry["scenario"].workers == reference_workers
+        and entry["scenario"].module_layout == "balanced"
+        and entry["scenario"].history_mode == "disabled"
+        and entry["scenario"].sharding_mode == "disabled"
+        and not entry["scenario"].uneven
+    )
+    curve = sorted(points, key=lambda point: point["test_count"])
+    counts = [point["test_count"] for point in curve]
+    if len(counts) != len(set(counts)):
+        raise RuntimeError("canonical reference curve contains duplicate test counts")
+    return curve
 
 
 def _parse_positive_csv(value: str) -> tuple[int, ...]:
@@ -372,26 +410,9 @@ def main() -> int:
         )
         results.append({"id": scenario.id, "scenario": scenario, "result": result})
 
-    reference_curve = sorted(
-        (
-            {
-                "test_count": entry["scenario"].test_count,
-                "workers_requested": entry["scenario"].workers,
-                "history_mode": entry["scenario"].history_mode,
-                "sharding_mode": entry["scenario"].sharding_mode,
-                "measurements": {
-                    name: {
-                        "median_seconds": measurement["median"],
-                        "median_tests_per_second": measurement["median_tests_per_second"],
-                        "observed_workers": measurement["observed_workers"],
-                    }
-                    for name, measurement in entry["result"]["measurements"].items()
-                },
-            }
-            for entry in results
-            if entry["id"].startswith("scale-")
-        ),
-        key=lambda point: point["test_count"],
+    reference_curve = _reference_curve(
+        results,
+        reference_workers=_reference_worker(arguments.workers),
     )
     serialized_results = [{"id": entry["id"], "result": entry["result"]} for entry in results]
     publication_eligible = (

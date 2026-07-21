@@ -35,13 +35,23 @@ smallest worker count within a narrow tolerance of the best median, avoiding a l
 measurement noise. `--write` stores that integer in
 `[tool.testenix].workers`; it is an explicit file change, never an effect of `workers = "auto"`.
 The automatic sweep respects the process-visible CPU capacity and tests at most 1/2/4 workers;
-larger counts must be requested explicitly with `--candidates`.
+larger counts must be requested explicitly with `--candidates`. Each complete suite run has a
+300-second deadline by default (`--run-timeout SECONDS`). Windows starts the command suspended and
+attaches a kill-on-close Job Object before resume. POSIX always signals the new root session and
+identity-checks observed detached descendants. A child that calls `setsid()` and exits between
+creation and the first process snapshot is outside an absolute kernel-containment guarantee; use a
+container for hostile suites.
 
 Pass `--shard-modules` to tune that explicit mode and `--manifest FILE` to include the verified
 single-import collection path in every native sample. When `--write` is present, Testenix refuses a
 transient sharding or manifest override that differs from `[tool.testenix]`, because writing only
 `workers` would persist a recommendation for a different execution profile. Configure the profile
-first or tune it without `--write`.
+first or tune it without `--write`. It also fingerprints project Python/TOML sources, explicit suite
+files (including linked source directories), and the trusted manifest, then rejects any observed
+content or file-identity drift after a sample. The final configuration update rechecks the original
+bytes immediately before an atomic replacement. Use an immutable checkout for publishable tuning:
+it excludes a writer racing that last filesystem operation, while installed packages, non-source
+data, and other runtime dependencies remain external inputs.
 
 Use `--pytest-source PATH` to add an optional pytest timing for a corresponding source suite. The
 tuner's primary contract is worker selection for the native suite. Its optional pytest ratio is
@@ -73,11 +83,12 @@ shard_modules = true
 ```
 
 This is deliberately off by default. Before splitting a module, Testenix statically fails closed
-when it detects module- or session-scoped fixtures, direct writes to module globals, mutation of
-obvious module-level containers, or executable import-time lifecycle behavior. Function-scoped
-fixtures, including autouse fixtures, may be recreated in separate workers and do not block
-sharding. Eager calls in module assignments, annotations, decorators, function defaults, and class
-bases or keywords are treated as import-time lifecycle behavior and keep the module intact.
+when it detects module- or session-scoped fixtures, imported fixture providers, direct writes to
+module globals, nested mutable containers, mutable class state, or executable import-time lifecycle
+behavior. Function-scoped fixtures defined in the collected module, including autouse fixtures,
+may be recreated in separate workers and do not block sharding. Eager calls in module assignments,
+annotations, decorators, function defaults, and class bases or keywords are treated as import-time
+lifecycle behavior and keep the module intact.
 
 Static analysis cannot prove that arbitrary calls, imported libraries, environment state, or
 external services are free of shared effects. Enabling the option is therefore a project trust
@@ -95,8 +106,10 @@ $ testenix manifest tests --output .testenix/collection.json
 $ testenix run tests --manifest .testenix/collection.json
 ```
 
-The manifest records collection roots, the complete Python-source inventory and SHA-256 hashes,
-test metadata, collection issues, and sharding decisions. Each run verifies the requested roots,
+The manifest records collection roots, every selected test file plus statically discoverable
+project-local Python import dependencies and their SHA-256 hashes, test metadata, collection issues,
+and sharding decisions. Parameter names are retained but values
+are redacted so collection-time environment data is not persisted. Each run verifies the requested roots,
 the exact file set, and every source digest before reusing it. Malformed manifest JSON is rejected
 as invalid input. If a file was added or removed, a source changed, or current-source verification
 cannot establish an exact match, the manifest is stale and Testenix falls back to the normal

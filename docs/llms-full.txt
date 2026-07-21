@@ -364,7 +364,8 @@ $ testenix run tests --manifest .testenix/collection.json
 ```
 
 Testenix verifies the complete file inventory and every SHA-256 before reuse. A stale manifest
-falls back to supervised collection rather than running a stale test selection.
+falls back to supervised collection rather than running a stale test selection. Parameter names
+remain visible in the artifact, but their values are redacted.
 
 ## Use it from Python
 
@@ -1163,13 +1164,23 @@ smallest worker count within a narrow tolerance of the best median, avoiding a l
 measurement noise. `--write` stores that integer in
 `[tool.testenix].workers`; it is an explicit file change, never an effect of `workers = "auto"`.
 The automatic sweep respects the process-visible CPU capacity and tests at most 1/2/4 workers;
-larger counts must be requested explicitly with `--candidates`.
+larger counts must be requested explicitly with `--candidates`. Each complete suite run has a
+300-second deadline by default (`--run-timeout SECONDS`). Windows starts the command suspended and
+attaches a kill-on-close Job Object before resume. POSIX always signals the new root session and
+identity-checks observed detached descendants. A child that calls `setsid()` and exits between
+creation and the first process snapshot is outside an absolute kernel-containment guarantee; use a
+container for hostile suites.
 
 Pass `--shard-modules` to tune that explicit mode and `--manifest FILE` to include the verified
 single-import collection path in every native sample. When `--write` is present, Testenix refuses a
 transient sharding or manifest override that differs from `[tool.testenix]`, because writing only
 `workers` would persist a recommendation for a different execution profile. Configure the profile
-first or tune it without `--write`.
+first or tune it without `--write`. It also fingerprints project Python/TOML sources, explicit suite
+files (including linked source directories), and the trusted manifest, then rejects any observed
+content or file-identity drift after a sample. The final configuration update rechecks the original
+bytes immediately before an atomic replacement. Use an immutable checkout for publishable tuning:
+it excludes a writer racing that last filesystem operation, while installed packages, non-source
+data, and other runtime dependencies remain external inputs.
 
 Use `--pytest-source PATH` to add an optional pytest timing for a corresponding source suite. The
 tuner's primary contract is worker selection for the native suite. Its optional pytest ratio is
@@ -1201,11 +1212,12 @@ shard_modules = true
 ```
 
 This is deliberately off by default. Before splitting a module, Testenix statically fails closed
-when it detects module- or session-scoped fixtures, direct writes to module globals, mutation of
-obvious module-level containers, or executable import-time lifecycle behavior. Function-scoped
-fixtures, including autouse fixtures, may be recreated in separate workers and do not block
-sharding. Eager calls in module assignments, annotations, decorators, function defaults, and class
-bases or keywords are treated as import-time lifecycle behavior and keep the module intact.
+when it detects module- or session-scoped fixtures, imported fixture providers, direct writes to
+module globals, nested mutable containers, mutable class state, or executable import-time lifecycle
+behavior. Function-scoped fixtures defined in the collected module, including autouse fixtures,
+may be recreated in separate workers and do not block sharding. Eager calls in module assignments,
+annotations, decorators, function defaults, and class bases or keywords are treated as import-time
+lifecycle behavior and keep the module intact.
 
 Static analysis cannot prove that arbitrary calls, imported libraries, environment state, or
 external services are free of shared effects. Enabling the option is therefore a project trust
@@ -1223,8 +1235,10 @@ $ testenix manifest tests --output .testenix/collection.json
 $ testenix run tests --manifest .testenix/collection.json
 ```
 
-The manifest records collection roots, the complete Python-source inventory and SHA-256 hashes,
-test metadata, collection issues, and sharding decisions. Each run verifies the requested roots,
+The manifest records collection roots, every selected test file plus statically discoverable
+project-local Python import dependencies and their SHA-256 hashes, test metadata, collection issues,
+and sharding decisions. Parameter names are retained but values
+are redacted so collection-time environment data is not persisted. Each run verifies the requested roots,
 the exact file set, and every source digest before reusing it. Malformed manifest JSON is rejected
 as invalid input. If a file was added or removed, a source changed, or current-source verification
 cannot establish an exact match, the manifest is stale and Testenix falls back to the normal
@@ -1632,6 +1646,7 @@ testenix tune [PATH ...]
 | `--candidates N[,N...]` | resource-aware 1/2/4 sweep | Positive worker counts to measure. Counts above the number of execution units are deduplicated at that limit; values above four require this explicit option. |
 | `--warmups N` | `1` | Unrecorded warmups for each native candidate and optional pytest source. |
 | `--repeats N` | `5` | Recorded samples for each candidate. Candidate order alternates between rounds. |
+| `--run-timeout SECONDS` | `300` | Deadline for each complete native or pytest suite run; cleanup uses a Windows Job Object or POSIX root-session plus identity-tracked descendants. |
 | `--pytest-source PATH` | none | Also time a corresponding pytest source path; repeat for multiple paths. |
 | `--json FILE\|-` | none | Write the complete tuning report to a new file, or standard output with `-`. |
 | `--shard-modules` / `--no-shard-modules` | configured value | Tune with explicit safe intra-module sharding or module affinity. |
@@ -1643,8 +1658,14 @@ establishes the inventory and outcomes, and every native candidate must match th
 persisting noise, it recommends the smallest worker count within a narrow tolerance of the best
 median. `--write` is the only configuration-mutating mode; normal tuning and adaptive auto do not
 edit configuration. A workers-only write is rejected when a transient sharding or manifest override
-differs from the loaded project configuration, because that recommendation would not describe the
-persisted execution profile.
+differs from the loaded project configuration, or when that configuration file changes during the
+measurement, because the recommendation would not describe the persisted execution profile. The
+writer compares the pre-tuning bytes again immediately before an atomic replacement. Project
+Python/TOML sources, linked source directories, explicit suite files, and a trusted manifest are
+fingerprinted by content and file identity after every sample; observed drift discards the complete
+result. Run publishable tuning from an immutable checkout to exclude a writer racing the final
+filesystem operation; installed packages, non-source data, and other runtime inputs are also outside
+that fingerprint.
 
 The optional pytest row is useful for local orientation only when it represents the corresponding
 source suite. A public pytest/Testenix claim still needs equivalent inventories and outcomes,
@@ -1659,7 +1680,9 @@ testenix manifest PATH [PATH ...] --output FILE
 
 The command performs supervised native collection and creates a new deterministic trusted
 manifest. It records collection roots, the complete selected Python-source inventory and SHA-256
-fingerprints, collected tests and issues, and conservative module-sharding decisions. `FILE` must
+fingerprints, collected tests and issues, and conservative module-sharding decisions. Test case
+parameter names are retained while their values are redacted, so environment-derived secrets are
+not copied into the trust artifact. `FILE` must
 not already exist; Testenix does not silently replace a previous trust artifact.
 
 Use it explicitly on later runs:
@@ -1855,11 +1878,13 @@ Path to a trusted collection manifest generated explicitly with:
 $ testenix manifest tests --output .testenix/collection.json
 ```
 
-On each run Testenix verifies the requested collection roots, complete selected Python-file
-inventory, and SHA-256 source digests. An exact match bypasses the collection-side imports; a stale
+On each run Testenix verifies the requested collection roots, selected test files, statically
+discoverable project-local Python import dependencies, and SHA-256 source digests. An exact match
+bypasses the collection-side imports; a stale
 but well-formed manifest falls back to normal supervised collection. Malformed JSON is rejected.
-Execution workers still import the modules they run. Regenerate the manifest when source files or
-dynamic collection inputs change.
+Execution workers still import the modules they run. Test parameter names remain available for
+diagnostics, but their values are stored only as `<redacted>` to avoid persisting secrets obtained
+during collection. Regenerate the manifest when source files or dynamic collection inputs change.
 
 The programmatic field is `manifest_path` and accepts a `pathlib.Path` or `None`.
 
@@ -2371,7 +2396,8 @@ invalid and excluded from performance comparisons.
    design covers 100, 500, 1,000, and 3,000 tests; 1, 2, 4, and `auto` workers;
    balanced/dominant/single-module layouts; and default history versus `--no-history`. The reference
    configuration changes one axis at a time. `--full-cross-product` is available when every
-   combination is worth the substantially larger runtime. `auto` remains an adaptive Testenix
+   combination is worth the substantially larger runtime; its artifact still projects one
+   canonical balanced/no-history reference curve. `auto` remains an adaptive Testenix
    request; the harness records the worker count observed in each Testenix sample. For the xdist
    side of that row, `auto` resolves separately to Python's logical CPU count and is labelled as
    such.
@@ -2382,7 +2408,18 @@ invalid and excluded from performance comparisons.
    inventories and hashes under directory source roots, the complete generated Python inventory,
    and that canonical `python -m pytest` / `python -m testenix run` commands point at the report's
    source and output roots. It records only aggregate timings/output sizes, digests, redacted Git
-   state, and optional content fingerprints.
+   state, and optional content fingerprints. Repeated or conflicting worker/history/sharding flags
+   fail closed, and an imported runtime must belong to the exact files owned by its installed
+   distribution rather than merely sharing the same `site-packages` directory.
+
+Every synthetic and real-project command has a bounded deadline and bounded cleanup. Windows starts
+the command suspended, attaches a kill-on-close Job Object, then resumes it. POSIX always signals
+the new root session and identity-checks every observed detached descendant. Polling cannot provide
+an absolute kernel guarantee for a child that calls `setsid()` and exits before the first snapshot;
+run hostile benchmark inputs inside a container or other kernel containment boundary.
+On POSIX the harness also discovers workers that created their own sessions; on Windows it uses a
+kill-on-close Job Object with a bounded recursive fallback. A timed-out runner therefore cannot
+continue consuming CPU or contaminate later counterbalanced samples.
 
 The 118-test project mentioned in the v0.2.0 release was a differential semantic-validation gate.
 Its three timings were single observations, not a committed multi-round benchmark, and therefore do
@@ -2885,9 +2922,12 @@ A caller may instead supply a `TrustedCollectionManifest` created by an earlier 
 collection. Before using it, Testenix enumerates the current roots and verifies the complete file
 set and every SHA-256 digest. An exact match bypasses collection imports; a stale manifest falls
 back to the supervised collector. Malformed serialized input is rejected at the adapter boundary.
-The manifest also carries prior sharding decisions so collection and scheduling agree. This removes
+Manifest parameter values are redacted at creation and serialization; only their names remain.
+The manifest also carries prior sharding decisions so collection and scheduling agree. A module
+using a fixture provider from outside its fingerprinted source fails closed to module affinity.
+This removes
 one module import per unchanged run, not the execution-worker import needed to reconstruct Python
-objects. Inputs to dynamic collection beyond selected source bytes remain the producer's trust
+objects. Inputs to dynamic collection beyond fingerprinted source bytes remain the producer's trust
 responsibility.
 
 Workers normally create a separate POSIX process session (or use recursive tree termination on
@@ -2978,15 +3018,18 @@ project intends to use Semantic Versioning once its public API reaches stability
 
 - `testenix tune` and its `testenix benchmark` alias for fresh-process, counterbalanced,
   history-disabled native worker-candidate measurements, native inventory/outcome validation,
-  JSON reports, and explicit `--write` persistence of the measured recommendation.
+  JSON reports, bounded per-run process-tree deadlines, and explicit `--write` persistence of the
+  measured recommendation with project-source fingerprinting and optimistic byte-drift protection
+  immediately before an atomic configuration replacement.
 - Explicit `--shard-modules` / `shard_modules = true` support for splitting eligible modules into
   finer execution units. Conservative static checks retain module affinity for module/session
   fixtures, visible global mutation, and import-time lifecycle hazards, including eager calls in
   assignments, decorators, function defaults, and class construction expressions.
 - Versioned trusted collection manifests generated with `testenix manifest ... --output FILE` and
   consumed with `testenix run --manifest FILE` or `[tool.testenix].manifest`. Exact collection
-  roots, complete source inventory, and SHA-256 digests are verified before collection imports are
-  bypassed; stale manifests fall back to supervised collection.
+  roots, selected test files, statically discoverable project-local import dependencies, and SHA-256
+  digests are verified before collection imports are bypassed; stale manifests fall back to
+  supervised collection, and parameter values are redacted.
 - Synthetic scaling-matrix tooling for 100/500/1,000/3,000 tests and balanced, dominant, and
   single-module layouts, plus a redaction-safe real-project benchmark harness.
 
@@ -2998,6 +3041,13 @@ project intends to use Semantic Versioning once its public API reaches stability
 - Benchmark documentation labels the historical `3.15×` result with its Testenix 0.1.0 version,
   four-worker configuration, 100,000-test/16-module synthetic workload, and `--no-history` mode;
   it is not presented as a current-version or real-project claim.
+
+### Fixed
+
+- Safe-module analysis now fails closed for imported fixture providers, nested mutable containers,
+  mutable class state, and all import-time calls including nested `sys.path` mutations.
+- Benchmark and tuning timeouts use Windows Job Objects or POSIX root-session plus identity-tracked
+  descendant cleanup instead of allowing observed workers to contaminate later measurements.
 
 ## [0.2.1] - 2026-07-21
 
@@ -3376,8 +3426,11 @@ Fields:
 Explicit portable collection result that may bypass collection imports.
 
 This is deliberately not an implicit cache.  A caller creates or loads the
-manifest and opts into trusting it for a run.  Testenix still compares the
-complete test-file inventory and every SHA-256 digest before using it.
+manifest and opts into trusting it for a run. Parameter names are retained
+for diagnostics, but every parameter value is replaced with the explicit
+``<redacted>`` sentinel. Testenix still compares the complete test-file
+inventory plus local import dependencies and every SHA-256 digest before
+using it.
 Dynamic collection influenced by anything other than source bytes (for
 example environment variables) remains the manifest producer's trust
 decision.
